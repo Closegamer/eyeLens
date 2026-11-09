@@ -1,0 +1,356 @@
+"""Webcam capture + MediaPipe face landmark tracking thread."""
+
+from __future__ import annotations
+
+import contextlib
+import threading
+import time
+import traceback
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+from PySide6.QtCore import QThread, Signal
+from PySide6.QtGui import QImage
+
+from .features import EyeFeatures, extract_features
+
+PREVIEW_WIDTH = 480
+PREVIEW_HEIGHT = 270
+
+
+@dataclass(frozen=True)
+class TrackerSnapshot:
+    seq: int
+    features: np.ndarray | None
+    openness: float
+    face_found: bool
+    timestamp: float
+    fps: float
+
+    @property
+    def eyes_open(self) -> bool:
+        return self.face_found and self.openness >= 0.08
+
+
+class EyeTracker(QThread):
+    """Runs camera + MediaPipe inference without blocking the UI thread."""
+
+    preview_ready = Signal(QImage)
+    status_changed = Signal(str)
+    face_changed = Signal(bool)
+    fps_changed = Signal(float)
+    error = Signal(str)
+    ready = Signal(bool)
+
+    def __init__(
+        self,
+        model_path: Path | None,
+        camera_index: int = 0,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.model_path = Path(model_path) if model_path else None
+        self.camera_index = int(camera_index)
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._snapshot = TrackerSnapshot(0, None, 0.0, False, 0.0, 0.0)
+        self._preview_requests = 0
+        self._status = "Camera stopped"
+        self._error = ""
+        self._seq = 0
+        self._ready = False
+
+    # ------------------------------------------------------------- lifecycle
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    def stop_and_wait(self, timeout_ms: int = 5000) -> None:
+        self.stop()
+        if self.isRunning():
+            self.wait(timeout_ms)
+
+    # --------------------------------------------------------------- preview
+    def acquire_preview(self) -> None:
+        with self._lock:
+            self._preview_requests += 1
+
+    def release_preview(self) -> None:
+        with self._lock:
+            self._preview_requests = max(0, self._preview_requests - 1)
+
+    # ------------------------------------------------------------------ state
+    @property
+    def status_text(self) -> str:
+        with self._lock:
+            return self._status
+
+    @property
+    def error_text(self) -> str:
+        with self._lock:
+            return self._error
+
+    @property
+    def is_ready(self) -> bool:
+        with self._lock:
+            return self._ready
+
+    def snapshot(self) -> TrackerSnapshot:
+        with self._lock:
+            return self._snapshot
+
+    def _set_status(self, text: str) -> None:
+        with self._lock:
+            changed = text != self._status
+            self._status = text
+        if changed:
+            self.status_changed.emit(text)
+
+    def _set_snapshot(self, snapshot: TrackerSnapshot) -> None:
+        with self._lock:
+            self._snapshot = snapshot
+
+    # -------------------------------------------------------------------- run
+    def run(self) -> None:
+        cap = None
+        landmarker = None
+        try:
+            import cv2
+            import mediapipe as mp
+            from mediapipe.tasks import python as mp_python
+            from mediapipe.tasks.python import vision
+
+            try:
+                import absl.logging
+
+                absl.logging.set_verbosity(absl.logging.ERROR)
+            except Exception:
+                pass
+
+            if self.model_path is None or not self.model_path.is_file():
+                self._fail(
+                    "Face tracking model is missing. Run scripts/download_model.py "
+                    "or restart eyeLens with an internet connection."
+                )
+                return
+
+            self._set_status("Loading face tracking model…")
+            options = vision.FaceLandmarkerOptions(
+                base_options=mp_python.BaseOptions(
+                    model_asset_path=str(self.model_path)
+                ),
+                running_mode=vision.RunningMode.VIDEO,
+                num_faces=1,
+                min_face_detection_confidence=0.5,
+                min_face_presence_confidence=0.5,
+                min_tracking_confidence=0.5,
+            )
+            landmarker = vision.FaceLandmarker.create_from_options(options)
+
+            if self._stop_event.is_set():
+                return
+            cap, camera_label = self._open_camera(cv2)
+            if cap is None:
+                self._fail(
+                    "Could not open the webcam. Check Windows camera privacy "
+                    "settings and whether another app is using it."
+                )
+                return
+            self._set_status(f"Camera running ({camera_label}) — looking for your face…")
+            with self._lock:
+                self._ready = True
+            self.ready.emit(True)
+
+            frame_count = 0
+            fps = 0.0
+            fps_window_start = time.perf_counter()
+            last_timestamp_ms = 0
+            last_preview = 0.0
+            last_face: bool | None = None
+            started_at = time.perf_counter()
+            failed_reads = 0
+            self.ready.emit(True)
+
+            while not self._stop_event.is_set():
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    failed_reads += 1
+                    if failed_reads >= 15:
+                        self._fail("The webcam stopped delivering frames.")
+                        break
+                    time.sleep(0.02)
+                    continue
+                failed_reads = 0
+
+                if frame.ndim == 2:
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+                else:
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                height, width = rgb.shape[:2]
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                timestamp_ms = int((time.perf_counter() - started_at) * 1000)
+                if timestamp_ms <= last_timestamp_ms:
+                    timestamp_ms = last_timestamp_ms + 1
+                last_timestamp_ms = timestamp_ms
+
+                result = landmarker.detect_for_video(mp_image, timestamp_ms)
+                frame_count += 1
+                now = time.perf_counter()
+                if now - fps_window_start >= 1.0:
+                    fps = frame_count / (now - fps_window_start)
+                    frame_count = 0
+                    fps_window_start = now
+                    self.fps_changed.emit(fps)
+
+                features: EyeFeatures | None = None
+                face_found = bool(result.face_landmarks)
+                if face_found:
+                    features = extract_features(
+                        result.face_landmarks[0], width, height
+                    )
+                    face_found = features is not None
+
+                if face_found != last_face:
+                    last_face = face_found
+                    self.face_changed.emit(face_found)
+                    self._set_status(
+                        "Tracking your eyes"
+                        if face_found
+                        else "Looking for your face…"
+                    )
+
+                self._seq += 1
+                self._set_snapshot(
+                    TrackerSnapshot(
+                        seq=self._seq,
+                        features=features.values if features else None,
+                        openness=features.openness if features else 0.0,
+                        face_found=face_found,
+                        timestamp=now,
+                        fps=fps,
+                    )
+                )
+
+                with self._lock:
+                    wants_preview = self._preview_requests > 0
+                if wants_preview and now - last_preview >= 1.0 / 15.0:
+                    last_preview = now
+                    self._emit_preview(cv2, frame, result.face_landmarks)
+        except Exception:  # pragma: no cover - hardware/driver dependent
+            traceback.print_exc()
+            self._fail("Eye tracking stopped unexpectedly. Check the log for details.")
+        finally:
+            if cap is not None:
+                with contextlib.suppress(Exception):
+                    cap.release()
+            if landmarker is not None:
+                with contextlib.suppress(Exception):
+                    landmarker.close()
+            with self._lock:
+                self._ready = False
+            self.ready.emit(False)
+            self._set_status("Camera stopped")
+
+    # ----------------------------------------------------------------- helpers
+    def _fail(self, message: str) -> None:
+        with self._lock:
+            self._error = message
+            self._status = message
+        self.error.emit(message)
+        self.status_changed.emit(message)
+
+    def _open_camera(self, cv2):
+        import platform
+
+        system = platform.system()
+        if system == "Windows":
+            candidates = [
+                (cv2.CAP_MSMF, 1280, 720, "MSMF 720p"),
+                (cv2.CAP_DSHOW, 640, 480, "DirectShow 480p"),
+                (cv2.CAP_ANY, 640, 480, "auto 480p"),
+            ]
+        else:
+            candidates = [
+                (cv2.CAP_ANY, 1280, 720, "720p"),
+                (cv2.CAP_ANY, 640, 480, "480p"),
+            ]
+
+        for api, width, height, label in candidates:
+            if self._stop_event.is_set():
+                return None, label
+            cap = cv2.VideoCapture(self.camera_index, api)
+            if not cap.isOpened():
+                cap.release()
+                continue
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            cap.set(cv2.CAP_PROP_FPS, 30)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            ok = False
+            for _ in range(5):
+                ok, frame = cap.read()
+                if ok and frame is not None:
+                    break
+            if ok:
+                actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                return cap, f"{label} {actual_w}x{actual_h}"
+            cap.release()
+        return None, ""
+
+    def _emit_preview(self, cv2, frame, landmarks) -> None:
+        try:
+            preview = frame
+            if preview.ndim == 2:
+                preview = cv2.cvtColor(preview, cv2.COLOR_GRAY2BGR)
+            preview = cv2.flip(preview, 1)
+            height, width = preview.shape[:2]
+            if landmarks:
+                points = landmarks[0]
+                # Flip x coordinates so the preview behaves like a mirror.
+                def pt(index: int) -> tuple[int, int]:
+                    lm = points[index]
+                    return int((1.0 - lm.x) * width), int(lm.y * height)
+
+                xs = []
+                ys = []
+                for idx in (10, 152, 234, 454):
+                    x, y = pt(idx)
+                    xs.append(x)
+                    ys.append(y)
+                if xs:
+                    x0, x1 = max(0, min(xs)), min(width - 1, max(xs))
+                    y0, y1 = max(0, min(ys)), min(height - 1, max(ys))
+                    cv2.rectangle(preview, (x0, y0), (x1, y1), (90, 90, 90), 1)
+
+                for outer, inner, upper, lower, iris in (
+                    (33, 133, 159, 145, 468),
+                    (362, 263, 386, 374, 473),
+                ):
+                    p_outer = pt(outer)
+                    p_inner = pt(inner)
+                    cv2.line(preview, p_outer, p_inner, (160, 160, 160), 1)
+                    for eye_point in (upper, lower):
+                        cv2.circle(preview, pt(eye_point), 1, (160, 160, 160), -1)
+                    cv2.circle(preview, pt(iris), 3, (40, 210, 255), -1)
+                    cv2.circle(preview, pt(iris), 5, (40, 120, 160), 1)
+                cv2.circle(preview, pt(1), 2, (200, 200, 200), -1)
+
+            preview = cv2.resize(
+                preview,
+                (PREVIEW_WIDTH, PREVIEW_HEIGHT),
+                interpolation=cv2.INTER_AREA,
+            )
+            rgb = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
+            image = QImage(
+                rgb.data,
+                PREVIEW_WIDTH,
+                PREVIEW_HEIGHT,
+                rgb.strides[0],
+                QImage.Format.Format_RGB888,
+            ).copy()
+            self.preview_ready.emit(image)
+        except Exception:
+            # Preview failures must never stop tracking.
+            traceback.print_exc()
