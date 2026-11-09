@@ -62,6 +62,8 @@ class CorrectionHandle(QWidget):
         QTimer.singleShot(0, self._configure_native)
 
     def _configure_native(self) -> None:
+        if not self.isVisible():
+            return
         if platform.system() != "Windows":
             return
         try:

@@ -52,7 +52,7 @@ immediately.
   - prediction = base polynomial/KRR prediction + weighted correction offset
   - RBF weights in standardized feature space (`gamma = 0.06`), squared and
     thresholded so the nearest correction dominates
-  - a new correction removes nearby old centres (similarity ≥ 0.70) so
+  - a new correction removes nearby old centres (similarity ≥ 0.60) so
     repeated fixes replace rather than compound
   - at most 64 centres; O(corrections) work per frame, update is instant
   - correction offsets are stored relative to the base model and persisted as

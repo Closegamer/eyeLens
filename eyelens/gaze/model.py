@@ -41,7 +41,7 @@ _KRR_MIN_IMPROVEMENT = 0.99
 # fitted model.  A broad kernel would move unrelated screen regions; a narrow
 # one would only help at the exact corrected pixel.
 _CORRECTION_GAMMA = 0.06
-_CORRECTION_SIMILARITY = 0.70
+_CORRECTION_SIMILARITY = 0.60
 _CORRECTION_MIN_WEIGHT = 0.02
 _MAX_CORRECTIONS = 64
 
