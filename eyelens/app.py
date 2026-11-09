@@ -304,11 +304,12 @@ class EyeLensApp(QObject):
             info.calibration_level = (
                 "ok" if self.model.quality_ok else "warn"
             )
-            label = (
-                "Initial accuracy"
-                if self.model.metrics.corrections
-                else "Accuracy"
-            )
+            if self.model.metrics.validation_points == 0:
+                label = "Estimated accuracy"
+            elif self.model.metrics.corrections:
+                label = "Initial accuracy"
+            else:
+                label = "Accuracy"
             detail = (
                 f"{label} ±{self.model.error_rmse:.0f} px · "
                 f"{self.model.metrics.n_points} points · "

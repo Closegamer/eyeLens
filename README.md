@@ -84,7 +84,9 @@ In demo mode the lens follows the mouse pointer instead of your eyes.
    The large **EYES** panel is a zoomed view of both eyes; the small **FACE**
    inset shows the whole camera frame so you can check your framing.
 3. Look at each of the 25 dots **with your eyes only** while keeping your head
-   still. The dot turns into a progress ring while samples are collected.
+   still. If the header says **“Head moved”**, return to your starting head
+   position; samples for that dot pause until you do. The dot turns into a
+   progress ring while samples are collected.
 4. After the 25th dot, eyeLens repeats a short 9-dot **accuracy check** on
    points it did not train on. This measures the real error instead of guessing.
 5. When the result appears, press **Enter** to keep the calibration or **R** to
@@ -136,10 +138,11 @@ Everything is also available from the tray icon and the settings window:
 
 ```
 webcam ──► MediaPipe Face Landmarker (478 landmarks, both irises)
-       ──► 14 scale-invariant features in a roll-corrected eye frame
-            iris position in each eye, vergence, head yaw/pitch/roll,
-            face position and apparent size
-       ──► per-user hybrid model (52 polynomial terms + kernel-ridge residual)
+       ──► 14 features in a roll-corrected eye frame
+            iris position in each eye, vergence, plus head/face diagnostics
+       ──► fitted model uses the 8 eye-in-head features
+            (raw head/face drift made held-out accuracy much worse)
+       ──► per-user hybrid model (eye-term polynomial + kernel-ridge residual)
             trained on 25 screen targets with grouped leave-one-point-out
             cross-validation; a separate 9-point check measures real error
        ──► 1€ filter + blink/loss handling
@@ -150,9 +153,15 @@ webcam ──► MediaPipe Face Landmarker (478 landmarks, both irises)
 
 A few implementation details that matter:
 
-- Head-pose proxies are included alongside iris position, so small head shifts
-  do not immediately break the mapping. Eye measurements are made in a rotated
-  eye frame, so a tilted head does not fake vertical gaze or a blink.
+- The fitted model uses only the 8 eye-in-head features. Raw head/face
+  translation features are kept for diagnostics and for the live “head moved”
+  calibration warning; using them as predictors made held-out accuracy much
+  worse on real calibration data.
+- Calibration shuffles the dot order and watches the head pose. If you drift
+  from the starting position, it warns and stops collecting samples for that
+  point, then retries it.
+- Eye measurements are made in a rotated eye frame, so a tilted head does not
+  fake vertical gaze or a blink.
 - Calibration keeps every stable frame from each target (usually several hundred
   samples) and discards blink/outlier frames per target before fitting.
 - During calibration the camera preview crops a fixed-aspect region around both

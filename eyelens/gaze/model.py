@@ -26,7 +26,15 @@ from typing import Any
 
 import numpy as np
 
-from .features import FEATURE_NAMES, FEATURE_VERSION, expand_features, expand_matrix
+from .features import (
+    FEATURE_NAMES,
+    FEATURE_VERSION,
+    MODEL_FEATURE_INDICES,
+    MODEL_MODE,
+    expand_features,
+    expand_matrix,
+    select_model_features,
+)
 
 MODEL_VERSION = 2
 _MIN_POINTS = 4
@@ -384,8 +392,12 @@ class GazeModel:
             else np.zeros((0, 2))
         )
         if self.correction_features.size:
+            correction_model = np.zeros_like(self.correction_features)
+            correction_model[:, list(MODEL_FEATURE_INDICES)] = (
+                self.correction_features[:, list(MODEL_FEATURE_INDICES)]
+            )
             self._correction_scaled = (
-                self.correction_features - self.raw_mean
+                correction_model - self.raw_mean
             ) / self.raw_std
         else:
             self._correction_scaled = np.zeros(
@@ -427,8 +439,15 @@ class GazeModel:
         )
         unique_points = np.unique(point_ids)
 
-        raw_mean, raw_std, raw_scaled = _standardize(samples)
-        expanded = expand_matrix(samples)
+        # Fit the gaze mapping on eye-in-head features only.  The head/face
+        # features stay in ``samples`` for diagnostics and for future models.
+        model_samples = np.zeros_like(samples)
+        model_samples[:, list(MODEL_FEATURE_INDICES)] = samples[
+            :, list(MODEL_FEATURE_INDICES)
+        ]
+
+        raw_mean, raw_std, raw_scaled = _standardize(model_samples)
+        expanded = expand_matrix(model_samples)
         mean, std, scaled = _standardize(expanded)
 
         ridge_alpha, ridge_score, ridge_per_point = _ridge_cv(
@@ -483,9 +502,11 @@ class GazeModel:
 
         # Clip unseen inputs with a modest extrapolation allowance so a bad
         # blink or an extreme head position cannot send the lens flying.
-        raw_range = np.maximum(samples.max(axis=0) - samples.min(axis=0), 1e-6)
-        clip_low = samples.min(axis=0) - 0.20 * raw_range
-        clip_high = samples.max(axis=0) + 0.20 * raw_range
+        raw_range = np.maximum(
+            model_samples.max(axis=0) - model_samples.min(axis=0), 1e-6
+        )
+        clip_low = model_samples.min(axis=0) - 0.20 * raw_range
+        clip_high = model_samples.max(axis=0) + 0.20 * raw_range
 
         metrics = CalibrationMetrics(
             train_rmse=train_rmse,
@@ -569,6 +590,7 @@ class GazeModel:
         raw = np.asarray(values, dtype=np.float64).reshape(-1)
         if raw.size != len(FEATURE_NAMES):
             raise ValueError(f"expected {len(FEATURE_NAMES)} features")
+        raw = select_model_features(raw)
         raw = np.clip(raw, self.clip_low, self.clip_high)
         out, raw_scaled = self._predict_base(raw)
         out = out + self._correction_offset(raw_scaled)
@@ -599,6 +621,8 @@ class GazeModel:
         if target_values.size != 2 or not np.all(np.isfinite(target_values)):
             raise ValueError("correction target has the wrong shape")
 
+        raw_full = raw
+        raw = select_model_features(raw)
         clip_low = np.minimum(self.clip_low, raw)
         clip_high = np.maximum(self.clip_high, raw)
         raw = np.clip(raw, clip_low, clip_high)
@@ -616,7 +640,9 @@ class GazeModel:
             kept_features = self.correction_features[keep]
             kept_offsets = self.correction_offsets[keep]
 
-        correction_features = np.vstack([kept_features, raw.reshape(1, -1)])
+        correction_features = np.vstack(
+            [kept_features, raw_full.reshape(1, -1)]
+        )
         correction_offsets = np.vstack([kept_offsets, offset.reshape(1, -1)])
         if correction_features.shape[0] > _MAX_CORRECTIONS:
             correction_features = correction_features[-_MAX_CORRECTIONS:]
@@ -699,6 +725,7 @@ class GazeModel:
         return {
             "version": MODEL_VERSION,
             "feature_version": FEATURE_VERSION,
+            "model_mode": MODEL_MODE,
             "created_at": self.created_at,
             "screen": self.screen,
             "openness_threshold": self.openness_threshold,
@@ -760,7 +787,19 @@ class GazeModel:
                 if isinstance(metrics, dict)
                 else 0
             )
-            correction_items = raw.get("corrections", [])
+            old_model = str(raw.get("model_mode", "")) != MODEL_MODE
+            if old_model:
+                # Saved before the eye-only model.  Its held-out number no
+                # longer describes the refitted model; report the fresh LOO
+                # estimate instead of a stale validation error.  Its drag
+                # corrections were relative to the old all-feature base and
+                # cannot be reused safely.
+                validation = 0.0
+                validation_points = 0
+                corrections = 0
+                correction_items = []
+            else:
+                correction_items = raw.get("corrections", [])
             correction_features = None
             correction_offsets = None
             if isinstance(correction_items, list) and correction_items:

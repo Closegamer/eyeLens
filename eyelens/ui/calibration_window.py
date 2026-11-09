@@ -8,6 +8,7 @@ import math
 import platform
 import time
 from enum import Enum, auto
+from random import Random
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, Signal
@@ -102,6 +103,8 @@ class CalibrationWindow(QWidget):
         self._eye_preview: QImage | None = None
         self._model: GazeModel | None = None
         self._primary_model: GazeModel | None = None
+        self._head_baseline: np.ndarray | None = None
+        self._head_warning = False
         self._error_message = ""
         self._done = False
         self._fit_started = False
@@ -121,22 +124,29 @@ class CalibrationWindow(QWidget):
 
     # ---------------------------------------------------------------- geometry
     @staticmethod
-    def _center_out(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    def _spread_order(
+        points: list[tuple[float, float]],
+    ) -> list[tuple[float, float]]:
+        """Centre first, then a fixed shuffle.
+
+        A row-major or centre-out order correlates slow head drift with target
+        position.  Shuffling spreads that drift across the screen and gives the
+        model much better held-out behaviour.
+        """
         if not points:
             return points
         xs = [point[0] for point in points]
         ys = [point[1] for point in points]
         center_x = (min(xs) + max(xs)) * 0.5
         center_y = (min(ys) + max(ys)) * 0.5
-        scale_x = max(max(xs) - min(xs), 1.0)
-        scale_y = max(max(ys) - min(ys), 1.0)
-
-        def key(point: tuple[float, float]) -> tuple[float, float]:
-            dx = (point[0] - center_x) / scale_x
-            dy = (point[1] - center_y) / scale_y
-            return (round(dx * dx + dy * dy, 6), math.atan2(dy, dx))
-
-        return sorted(points, key=key)
+        center_point = min(
+            points,
+            key=lambda point: (point[0] - center_x) ** 2
+            + (point[1] - center_y) ** 2,
+        )
+        rest = [point for point in points if point != center_point]
+        Random(20261109).shuffle(rest)
+        return [center_point] + rest
 
     def _build_points(self) -> list[tuple[float, float]]:
         geometry = self.screen.geometry()
@@ -149,7 +159,7 @@ class CalibrationWindow(QWidget):
             geometry.top() + top_y + (bottom_y - top_y) * index / 4.0
             for index in range(5)
         ]
-        return self._center_out([(x, y) for y in ys for x in xs])
+        return self._spread_order([(x, y) for y in ys for x in xs])
 
     def _build_validation_points(self) -> list[tuple[float, float]]:
         geometry = self.screen.geometry()
@@ -164,7 +174,7 @@ class CalibrationWindow(QWidget):
             geometry.top() + top_y + (bottom_y - top_y) * frac
             for frac in self.VALIDATION_GRID_Y
         ]
-        return self._center_out([(x, y) for y in ys for x in xs])
+        return self._spread_order([(x, y) for y in ys for x in xs])
 
     # --------------------------------------------------------------- lifecycle
     def showEvent(self, event) -> None:
@@ -266,6 +276,8 @@ class CalibrationWindow(QWidget):
         self._all_openness = []
         self._model = None
         self._primary_model = None
+        self._head_baseline = None
+        self._head_warning = False
         self._error_message = ""
         self._fit_started = False
         self._fit_stage = "primary"
@@ -305,11 +317,17 @@ class CalibrationWindow(QWidget):
         if accepted is None or accepted.shape[0] < 6:
             if not self._retried:
                 self._retried = True
-                self._retry_reason = (
-                    "Hold still — I lost your eyes. Trying this point again…"
-                    if accepted is None
-                    else "Not enough steady samples. Trying this point again…"
-                )
+                if self._head_warning:
+                    self._retry_reason = (
+                        "Head moved — return to your starting head position "
+                        "and keep still. Trying this point again…"
+                    )
+                else:
+                    self._retry_reason = (
+                        "Hold still — I lost your eyes. Trying this point again…"
+                        if accepted is None
+                        else "Not enough steady samples. Trying this point again…"
+                    )
                 self._enter(Phase.RETRY)
             else:
                 self._error_message = (
@@ -320,6 +338,10 @@ class CalibrationWindow(QWidget):
             return
 
         target = self._points[self._point_index]
+        if not self._validating and self._point_index == 0:
+            # The first (centre) point defines the head position the user
+            # should keep for the rest of the session.
+            self._head_baseline = np.median(accepted[:, 8:14], axis=0)
         point_id = self._point_index + (
             len(self._primary_points) if self._validating else 0
         )
@@ -443,6 +465,12 @@ class CalibrationWindow(QWidget):
         snap = self.tracker.snapshot()
         face_before = self._face_found
         self._face_found = snap.face_found
+        warning_before = self._head_warning
+        self._update_head_warning(
+            snap.features if snap.face_found else None
+        )
+        if warning_before != self._head_warning:
+            self.update(QRect(0, 60, int(self.width()), 34))
         if snap.face_found:
             if self._face_since is None:
                 self._face_since = now
@@ -521,6 +549,18 @@ class CalibrationWindow(QWidget):
                 )
             )
 
+    def _update_head_warning(self, features: np.ndarray | None) -> None:
+        if self._head_baseline is None or features is None:
+            self._head_warning = False
+            return
+        drift = np.abs(
+            np.asarray(features[8:14], dtype=np.float64) - self._head_baseline
+        )
+        thresholds = np.asarray(
+            [0.03, 0.04, 0.03, 0.06, 0.06, 0.01], dtype=np.float64
+        )
+        self._head_warning = bool(np.any(drift > thresholds))
+
     def _collect(self, snap) -> None:
         if snap.seq == self._last_seq:
             return
@@ -528,6 +568,8 @@ class CalibrationWindow(QWidget):
         if not snap.face_found or snap.features is None:
             return
         if snap.openness < 0.045:
+            return
+        if self._head_warning:
             return
         features = np.asarray(snap.features, dtype=np.float64)
         if features.shape != (len(FEATURE_NAMES),):
@@ -589,8 +631,14 @@ class CalibrationWindow(QWidget):
             "eyeLens calibration",
         )
         painter.setFont(QFont("Segoe UI", 10))
-        painter.setPen(MUTED)
-        if self._phase == Phase.RESULT:
+        subtitle_color = MUTED
+        if self._head_warning and self._phase in (
+            Phase.SETTLE,
+            Phase.SAMPLE,
+        ):
+            subtitle = "Head moved — return to your starting head position."
+            subtitle_color = AMBER
+        elif self._phase == Phase.RESULT:
             subtitle = "Calibration complete — this is the accuracy it measured."
         elif self._phase == Phase.FIT:
             subtitle = (
@@ -602,6 +650,7 @@ class CalibrationWindow(QWidget):
             subtitle = "Accuracy check — look at each dot with your eyes only."
         else:
             subtitle = "Look at each dot with your eyes only. Keep your head still."
+        painter.setPen(subtitle_color)
         painter.drawText(
             QRectF(0, 66, width, 24),
             Qt.AlignmentFlag.AlignHCenter,
@@ -661,7 +710,11 @@ class CalibrationWindow(QWidget):
             )
             if self._validating:
                 hint = "Accuracy check · " + hint
-            painter.setPen(MUTED)
+            if self._head_warning:
+                hint = "Head moved — return to your starting head position"
+                painter.setPen(AMBER)
+            else:
+                painter.setPen(MUTED)
             painter.setFont(QFont("Segoe UI", 10))
             painter.drawText(
                 QRectF(0, height - 52, width, 22),

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
@@ -95,6 +97,40 @@ def test_independent_validation_error_is_used() -> None:
     assert model.metrics.validation_points == 9
     assert model.error_rmse == 42.0
     assert model.summary().endswith("±42 px")
+
+
+def test_model_ignores_head_and_face_features() -> None:
+    samples, targets, point_ids = make_dataset()
+    model = GazeModel.fit(samples, targets, point_ids, 0.12, SCREEN.to_dict())
+    base = samples[50].copy()
+    changed = base.copy()
+    changed[8:] += 5.0
+    first = model.predict(base)
+    second = model.predict(changed)
+    assert abs(first.x - second.x) < 1e-6
+    assert abs(first.y - second.y) < 1e-6
+
+
+def test_load_without_model_mode_uses_loo_estimate(tmp_path) -> None:
+    samples, targets, point_ids = make_dataset()
+    model = GazeModel.fit(
+        samples,
+        targets,
+        point_ids,
+        0.12,
+        SCREEN.to_dict(),
+        validation_rmse=42.0,
+        validation_points=9,
+    )
+    raw = model.to_dict()
+    raw.pop("model_mode")
+    path = tmp_path / "old-calibration.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    loaded = GazeModel.load(path)
+    assert loaded is not None
+    assert loaded.metrics.validation_rmse == 0.0
+    assert loaded.metrics.validation_points == 0
+    assert loaded.error_rmse == loaded.metrics.loo_rmse
 
 
 def test_hybrid_uses_kernel_stage_for_nonlinear_mapping() -> None:

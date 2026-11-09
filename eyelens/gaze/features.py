@@ -110,6 +110,25 @@ EXPANDED_FEATURE_NAMES: tuple[str, ...] = (
 
 _NAME_TO_INDEX = {name: i for i, name in enumerate(FEATURE_NAMES)}
 
+# The fitted gaze model deliberately uses only the eye-in-head features.
+# Raw head/face translation features (head yaw/pitch/roll proxies, face x/y,
+# apparent face size) drift slowly during a calibration and correlate with
+# target position.  On real calibration data they made held-out accuracy much
+# worse: the model learned the drift as a gaze cue.  Keep the full 14-value
+# vector for diagnostics and previews, but fit on the eye features only.
+MODEL_FEATURE_INDICES: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6, 7)
+MODEL_MODE = "iris8"
+
+
+def select_model_features(values: np.ndarray) -> np.ndarray:
+    """Return a copy of a feature vector with non-model features zeroed."""
+    values = np.asarray(values, dtype=np.float64).reshape(-1)
+    if values.size != len(FEATURE_NAMES):
+        raise ValueError(f"expected {len(FEATURE_NAMES)} features, got {values.size}")
+    result = np.zeros_like(values)
+    result[list(MODEL_FEATURE_INDICES)] = values[list(MODEL_FEATURE_INDICES)]
+    return result
+
 
 @dataclass(frozen=True)
 class EyeFeatures:
