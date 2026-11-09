@@ -1,45 +1,50 @@
 # eyeLens — Continue Session
 
-**Memory:** `plans/handoffs/HANDOFF_eyelens-eye-preview_2026-11-09.md`
-**Status:** v0.5.0 implemented, tested and pushed. Nothing running. Real-face
-visual check and calibration accuracy are the pending tests.
+**Memory:** `plans/handoffs/HANDOFF_eyelens-eye-only-model_2026-11-09.md`
+**Status:** v0.6.0 implemented, tested and pushed. Nothing running. Restart and
+re-test; a fresh real-face calibration is the next acceptance test.
 **Repo:** `https://github.com/Closegamer/eyeLens` (private, branch `main`)
-**Code commit:** `b967f9a` · tag `v0.5.0`
-**Chain:** `standalone-08a28c4a` seq 5
+**Code commit:** `fcc4b60` · tag `v0.6.0`
+**Chain:** `standalone-08a28c4a` seq 6
 
-## What changed in v0.5.0
+## What changed in v0.6.0
 
-- **Zoomed EYES panel during calibration**: a 320×150 close-up of both eyes,
-  cropped from the camera around the eye/eyebrow band and upscaled to 640×300.
-  Eye corners, lids, and iris centres are marked.
-- **Small FACE inset** in the bottom-right of the EYES panel shows the whole
-  camera frame for framing.
-- The tracker has a new `eyes_preview_ready` signal; the calibration window
-  falls back to the full preview if no face is detected.
-- The calibration grid top moved down to ~230–240 px and the face status pill
-  moved to y=184 so the larger preview does not overlap anything.
-- Version `0.5.0`.
+- **The gaze model now fits only the 8 eye-in-head features** (iris positions,
+  iris average, vergence). Real calibration data showed the old all-14 model
+  had held-out error **234 px**; eye-only is **~104 px (LOO 93)**.
+- Raw head/face features were learning slow head drift as a gaze cue. They are
+  still saved for diagnostics and for the head-still warning, but are masked
+  from the fitted model.
+- **Existing calibration files are refitted with the eye-only model on load.**
+  Their stale validation number and old drag corrections are dropped. On this
+  machine the old calibration now shows **“Good · ±93 px”** (estimated) instead
+  of 234 px.
+- **Calibration order is now centre-first plus a fixed shuffle**, so slow head
+  drift is spread across the screen.
+- **Head-drift warning**: the first point sets a head baseline; if the user
+  drifts, the header/bottom hint says “Head moved — return to your starting head
+  position” and sampling pauses for that point.
+- Version `0.6.0`.
 
 ## What is next
 
-1. Run `run.bat`, start calibration, and check the EYES panel: both eyes should
-   fill it with aligned iris markers; the FACE inset should show framing.
-2. If the crop is too tight/loose, adjust `span_x * 2.2` / `span_y * 1.8` in
-   `eye_crop_box()` (`eyelens/gaze/tracker.py`).
-3. If calibration is still not accurate enough, the next real step is
-   **crop-based inference**: crop the face/eye region, run MediaPipe on it at a
-   higher effective resolution, and map landmarks back. This needs a real-face
-   test.
-4. Real-face calibration and mouse-correction quality are still pending from
-   v0.2/v0.3.
+1. Restart eyeLens. The existing calibration refits eye-only and should be
+   noticeably better without recalibrating.
+2. If still off, recalibrate to get the shuffled order and head-drift warning.
+   Re-do mouse corrections afterward; the old ones were discarded.
+3. If accuracy is still not enough, next options:
+   - denser 6×6/7×7 calibration grid;
+   - MediaPipe head-pose (facial transformation matrix) features;
+   - crop-based landmark inference on the eye region.
+4. Real-face calibration and mouse-correction quality remain the pending tests.
 
 ## Exact state
 
 - Virtualenv: `C:\a_REPOS\eyeLense\.venv` (Python 3.12).
-- Version: `0.5.0`.
-- Tests: 29 passed; ruff clean; smoke test exit 0; synthetic calibration E2E
-  still passes; offscreen EYES/FACE layout rendered correctly.
+- Version: `0.6.0`.
+- Tests: 31 passed; ruff clean; smoke test exit 0; synthetic calibration E2E
+  passes; old real calibration loads with LOO 93 and 0 corrections.
 - `Modelfile` in the repo root is still an unrelated pre-existing file; leave it
   untracked.
-- This memory file and the v0.5 handoff are committed in the session commit
-  after `b967f9a`.
+- This memory file and the v0.6 handoff are committed in the session commit
+  after `fcc4b60`.
