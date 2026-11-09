@@ -194,7 +194,10 @@ def test_pose_correction_recovers_pose_dependent_offset(tmp_path) -> None:
         point_ids,
         0.12,
         SCREEN.to_dict(),
-        pose_samples=poses,
+        motion_samples=samples,
+        motion_targets=shifted,
+        motion_point_ids=point_ids,
+        motion_poses=poses,
         pose_alpha=0.01,
         pose_weight=1.0,
     )
@@ -209,7 +212,7 @@ def test_pose_correction_recovers_pose_dependent_offset(tmp_path) -> None:
     )
     assert posed.metrics.pose_weight == 1.0
     assert posed.metrics.pose_alpha == 0.01
-    assert posed.pose_samples.shape == (samples.shape[0], 6)
+    assert posed.pose_correction is not None
     assert posed_error < base_error * 0.6
 
     path = tmp_path / "posed.json"
@@ -217,6 +220,7 @@ def test_pose_correction_recovers_pose_dependent_offset(tmp_path) -> None:
     loaded = GazeModel.load(path)
     assert loaded is not None
     assert loaded.metrics.pose_weight == 1.0
+    assert loaded.pose_correction is not None
     restored = loaded.predict(samples[index], poses[index])
     assert abs(restored.x - posed_prediction.x) < 1e-6
     assert abs(restored.y - posed_prediction.y) < 1e-6

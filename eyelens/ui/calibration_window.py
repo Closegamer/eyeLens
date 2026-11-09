@@ -8,7 +8,6 @@ import math
 import platform
 import time
 from enum import Enum, auto
-from random import Random
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer, Signal
@@ -60,8 +59,10 @@ class CalibrationWindow(QWidget):
     FACE_PILL_RECT = QRectF(24, 184, 260, 28)
     VALIDATION_GRID_X = (0.16, 0.5, 0.84)
     VALIDATION_GRID_Y = (0.28, 0.55, 0.82)
-    SETTLE_SECONDS = 0.50
-    SAMPLE_SECONDS = 1.20
+    SETTLE_SECONDS = 0.65
+    STABLE_SECONDS = 0.65
+    MOTION_SECONDS = 1.00
+    SAMPLE_SECONDS = STABLE_SECONDS + MOTION_SECONDS
     RETRY_SECONDS = 1.50
     COUNTDOWN_SECONDS = 2.0
 
@@ -94,10 +95,17 @@ class CalibrationWindow(QWidget):
         self._current_samples: list[
             tuple[np.ndarray, float, np.ndarray | None]
         ] = []
+        self._current_motion_samples: list[
+            tuple[np.ndarray, float, np.ndarray | None]
+        ] = []
         self._samples: list[np.ndarray] = []
         self._targets: list[list[float]] = []
         self._point_id_list: list[int] = []
         self._pose_list: list[np.ndarray | None] = []
+        self._motion_samples: list[np.ndarray] = []
+        self._motion_targets: list[list[float]] = []
+        self._motion_point_ids: list[int] = []
+        self._motion_poses: list[np.ndarray] = []
         self._all_openness: list[float] = []
         self._last_seq = -1
         self._face_found = False
@@ -108,6 +116,7 @@ class CalibrationWindow(QWidget):
         self._primary_model: GazeModel | None = None
         self._head_baseline: np.ndarray | None = None
         self._head_warning = False
+        self._motion_hint = False
         self._error_message = ""
         self._done = False
         self._fit_started = False
@@ -127,14 +136,15 @@ class CalibrationWindow(QWidget):
 
     # ---------------------------------------------------------------- geometry
     @staticmethod
-    def _spread_order(
+    def _center_out(
         points: list[tuple[float, float]],
     ) -> list[tuple[float, float]]:
-        """Centre first, then a fixed shuffle.
+        """Centre first, then expanding rings.
 
-        A row-major or centre-out order correlates slow head drift with target
-        position.  Shuffling spreads that drift across the screen and gives the
-        model much better held-out behaviour.
+        A predictable spatial order is much easier for the user to follow than
+        a random jump across the screen.  Randomising the order made gaze
+        sampling noticeably worse; slow head drift is handled by the head
+        warning and the optional pose correction instead.
         """
         if not points:
             return points
@@ -142,14 +152,15 @@ class CalibrationWindow(QWidget):
         ys = [point[1] for point in points]
         center_x = (min(xs) + max(xs)) * 0.5
         center_y = (min(ys) + max(ys)) * 0.5
-        center_point = min(
-            points,
-            key=lambda point: (point[0] - center_x) ** 2
-            + (point[1] - center_y) ** 2,
-        )
-        rest = [point for point in points if point != center_point]
-        Random(20261109).shuffle(rest)
-        return [center_point] + rest
+        scale_x = max(max(xs) - min(xs), 1.0)
+        scale_y = max(max(ys) - min(ys), 1.0)
+
+        def key(point: tuple[float, float]) -> tuple[float, float]:
+            dx = (point[0] - center_x) / scale_x
+            dy = (point[1] - center_y) / scale_y
+            return (round(dx * dx + dy * dy, 6), math.atan2(dy, dx))
+
+        return sorted(points, key=key)
 
     def _build_points(self) -> list[tuple[float, float]]:
         geometry = self.screen.geometry()
@@ -162,7 +173,7 @@ class CalibrationWindow(QWidget):
             geometry.top() + top_y + (bottom_y - top_y) * index / 4.0
             for index in range(5)
         ]
-        return self._spread_order([(x, y) for y in ys for x in xs])
+        return self._center_out([(x, y) for y in ys for x in xs])
 
     def _build_validation_points(self) -> list[tuple[float, float]]:
         geometry = self.screen.geometry()
@@ -177,7 +188,7 @@ class CalibrationWindow(QWidget):
             geometry.top() + top_y + (bottom_y - top_y) * frac
             for frac in self.VALIDATION_GRID_Y
         ]
-        return self._spread_order([(x, y) for y in ys for x in xs])
+        return self._center_out([(x, y) for y in ys for x in xs])
 
     # --------------------------------------------------------------- lifecycle
     def showEvent(self, event) -> None:
@@ -229,7 +240,8 @@ class CalibrationWindow(QWidget):
             return
         if self._phase == Phase.RESULT:
             if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
-                self._accept()
+                if self._model is not None and self._model.quality_ok:
+                    self._accept()
                 return
             if key == Qt.Key.Key_R:
                 self._restart_all()
@@ -252,7 +264,11 @@ class CalibrationWindow(QWidget):
         self.close()
 
     def _accept(self) -> None:
-        if self._model is None or self._done:
+        if (
+            self._model is None
+            or self._done
+            or not self._model.quality_ok
+        ):
             return
         self._done = True
         self.finished.emit(self._model)
@@ -273,10 +289,15 @@ class CalibrationWindow(QWidget):
         self._retried = False
         self._retry_reason = ""
         self._current_samples = []
+        self._current_motion_samples = []
         self._samples = []
         self._targets = []
         self._point_id_list = []
         self._pose_list = []
+        self._motion_samples = []
+        self._motion_targets = []
+        self._motion_point_ids = []
+        self._motion_poses = []
         self._all_openness = []
         self._model = None
         self._primary_model = None
@@ -294,7 +315,9 @@ class CalibrationWindow(QWidget):
 
     def _start_point(self) -> None:
         self._current_samples = []
+        self._current_motion_samples = []
         self._last_seq = -1
+        self._motion_hint = False
         self._enter(Phase.SETTLE)
 
     def _start_sampling(self) -> None:
@@ -308,6 +331,7 @@ class CalibrationWindow(QWidget):
         self._retried = False
         self._retry_reason = ""
         self._current_samples = []
+        self._current_motion_samples = []
         self._last_seq = -1
         self._validation_start = len(self._samples)
         self._fit_started = False
@@ -358,6 +382,18 @@ class CalibrationWindow(QWidget):
             self._targets.append([target[0], target[1]])
             self._point_id_list.append(point_id)
             self._pose_list.append(poses[index] if poses is not None else None)
+        motion_filtered = self._filter_motion_samples()
+        if motion_filtered is not None:
+            motion_rows, motion_pose_matrix = motion_filtered
+            if (
+                motion_pose_matrix is not None
+                and len(motion_pose_matrix) == len(motion_rows)
+            ):
+                for index, row in enumerate(motion_rows):
+                    self._motion_samples.append(row)
+                    self._motion_targets.append([target[0], target[1]])
+                    self._motion_point_ids.append(point_id)
+                    self._motion_poses.append(motion_pose_matrix[index])
         self._point_index += 1
         self._retried = False
         self._retry_reason = ""
@@ -408,53 +444,85 @@ class CalibrationWindow(QWidget):
             return 0.0
         return float(np.sqrt(np.mean(list(per_point.values()))))
 
-    def _available_pose_samples(self) -> np.ndarray | None:
+    def _motion_arrays(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+        if not self._motion_samples or not self._motion_poses:
+            return None
+        samples = np.vstack(self._motion_samples)
+        targets = np.asarray(self._motion_targets, dtype=np.float64)
+        point_ids = np.asarray(self._motion_point_ids, dtype=np.int64)
+        poses = np.asarray(self._motion_poses, dtype=np.float64)
         if (
-            not self._pose_list
-            or len(self._pose_list) != len(self._samples)
-            or any(pose is None for pose in self._pose_list)
+            samples.shape[0] != targets.shape[0]
+            or samples.shape[0] != point_ids.size
+            or samples.shape[0] != poses.shape[0]
         ):
             return None
-        return np.vstack(self._pose_list)
+        return samples, targets, point_ids, poses
 
     def _select_pose_correction(
         self, primary: GazeModel
     ) -> tuple[float, float, float]:
         """Choose whether a global head-pose correction helps held-out points.
 
-        Returns (validation_rmse, pose_alpha, pose_weight).  The correction is
-        fitted on the primary training residuals and accepted only if it
-        improves the independent 9-point validation by at least 2%.
+        The correction is fitted on the primary motion samples (same targets,
+        deliberately varied head pose) and accepted only if it improves the
+        combined stable+motion validation by at least 5% and 10 px.
         """
-        base_validation = self._validation_error(primary)
-        poses = self._available_pose_samples()
+        base_stable = self._validation_error(primary)
+        motion = self._motion_arrays()
         start = self._validation_start
         if (
-            poses is None
+            motion is None
             or start <= 0
             or start >= len(self._samples)
             or self._primary_model is None
+            or any(pose is None for pose in self._pose_list)
         ):
-            return base_validation, 0.0, 0.0
-        primary_targets = np.asarray(
-            self._targets[:start], dtype=np.float64
-        )
-        validation_targets = np.asarray(
-            self._targets[start:], dtype=np.float64
-        )
-        validation_ids = np.asarray(
-            self._point_id_list[start:], dtype=np.int64
-        )
-        primary_predictions = np.asarray(
+            return base_stable, 0.0, 0.0
+        (
+            motion_samples,
+            motion_targets,
+            motion_ids,
+            motion_poses,
+        ) = motion
+        primary_motion = motion_ids < len(self._primary_points)
+        validation_motion = ~primary_motion
+        if not np.any(primary_motion) or not np.any(validation_motion):
+            return base_stable, 0.0, 0.0
+
+        primary_motion_predictions = np.asarray(
             [
                 [prediction.x, prediction.y]
                 for prediction in (
-                    primary.predict(row) for row in self._samples[:start]
+                    primary.predict_unclipped(row)
+                    for row in motion_samples[primary_motion]
                 )
             ],
             dtype=np.float64,
         )
-        base_validation_predictions = np.asarray(
+        motion_validation_predictions = np.asarray(
+            [
+                [prediction.x, prediction.y]
+                for prediction in (
+                    primary.predict_unclipped(row)
+                    for row in motion_samples[validation_motion]
+                )
+            ],
+            dtype=np.float64,
+        )
+        residuals = (
+            motion_targets[primary_motion] - primary_motion_predictions
+        )
+        stable_validation_targets = np.asarray(
+            self._targets[start:], dtype=np.float64
+        )
+        stable_validation_ids = np.asarray(
+            self._point_id_list[start:], dtype=np.int64
+        )
+        stable_validation_poses = np.vstack(self._pose_list[start:])
+        stable_validation_predictions = np.asarray(
             [
                 [prediction.x, prediction.y]
                 for prediction in (
@@ -463,24 +531,46 @@ class CalibrationWindow(QWidget):
             ],
             dtype=np.float64,
         )
-        residuals = primary_targets - primary_predictions
-        best_validation = base_validation
+        motion_validation_targets = motion_targets[validation_motion]
+        motion_validation_ids = motion_ids[validation_motion]
+        motion_validation_poses = motion_poses[validation_motion]
+
+        def combined_error(
+            stable_predictions: np.ndarray,
+            motion_predictions: np.ndarray,
+        ) -> float:
+            predictions = np.vstack(
+                [stable_predictions, motion_predictions]
+            )
+            targets = np.vstack(
+                [stable_validation_targets, motion_validation_targets]
+            )
+            ids = np.concatenate(
+                [stable_validation_ids, motion_validation_ids]
+            )
+            return self._point_rmse(predictions, targets, ids)
+
+        best_validation = combined_error(
+            stable_validation_predictions, motion_validation_predictions
+        )
         best_alpha = 0.0
         best_weight = 0.0
         for alpha in POSE_ALPHAS:
             correction = fit_pose_correction(
-                poses[:start], residuals, float(alpha)
+                motion_poses[primary_motion], residuals, float(alpha)
             )
-            corrected = base_validation_predictions + np.asarray(
-                [correction.apply(pose) for pose in poses[start:]],
+            stable_corrected = stable_validation_predictions + np.asarray(
+                [correction.apply(pose) for pose in stable_validation_poses],
                 dtype=np.float64,
             )
-            value = self._point_rmse(
-                corrected, validation_targets, validation_ids
+            motion_corrected = motion_validation_predictions + np.asarray(
+                [correction.apply(pose) for pose in motion_validation_poses],
+                dtype=np.float64,
             )
+            value = combined_error(stable_corrected, motion_corrected)
             if (
-                value < best_validation * 0.97
-                and best_validation - value >= 5.0
+                value < best_validation * 0.95
+                and best_validation - value >= 10.0
             ):
                 best_validation = value
                 best_alpha = float(alpha)
@@ -519,9 +609,18 @@ class CalibrationWindow(QWidget):
                     pose_alpha,
                     pose_weight,
                 ) = self._select_pose_correction(self._primary_model)
-            final_poses = (
-                self._available_pose_samples() if pose_weight > 0 else None
-            )
+            motion = self._motion_arrays()
+            motion_samples = None
+            motion_targets = None
+            motion_point_ids = None
+            motion_poses = None
+            if pose_weight > 0 and motion is not None:
+                (
+                    motion_samples,
+                    motion_targets,
+                    motion_point_ids,
+                    motion_poses,
+                ) = motion
             self._model = GazeModel.fit(
                 samples=samples,
                 targets=targets,
@@ -530,7 +629,10 @@ class CalibrationWindow(QWidget):
                 screen=info,
                 validation_rmse=validation_rmse,
                 validation_points=len(self._validation_points),
-                pose_samples=final_poses,
+                motion_samples=motion_samples,
+                motion_targets=motion_targets,
+                motion_point_ids=motion_point_ids,
+                motion_poses=motion_poses,
                 pose_alpha=pose_alpha,
                 pose_weight=pose_weight,
             )
@@ -542,23 +644,25 @@ class CalibrationWindow(QWidget):
             self._error_message = f"Could not build the calibration model: {exc}"
             self._enter(Phase.ERROR)
 
-    def _filter_current_samples(
+    def _filter_samples(
         self,
+        entries: list[tuple[np.ndarray, float, np.ndarray | None]],
+        filter_head: bool,
     ) -> tuple[np.ndarray, np.ndarray | None] | None:
-        if len(self._current_samples) < 7:
+        if len(entries) < 7:
             return None
-        openness = np.array([item[1] for item in self._current_samples])
+        openness = np.array([item[1] for item in entries])
         median_open = float(np.median(openness))
         threshold = max(0.055, median_open * 0.55)
-        entries = [
+        filtered = [
             (features, pose)
-            for features, value, pose in self._current_samples
+            for features, value, pose in entries
             if value >= threshold
         ]
-        if len(entries) < 6:
+        if len(filtered) < 6:
             return None
-        matrix = np.vstack([entry[0] for entry in entries])
-        poses = [entry[1] for entry in entries]
+        matrix = np.vstack([entry[0] for entry in filtered])
+        poses = [entry[1] for entry in filtered]
 
         def apply_keep(keep: np.ndarray) -> None:
             nonlocal matrix, poses
@@ -568,21 +672,28 @@ class CalibrationWindow(QWidget):
         median = np.median(matrix, axis=0)
         mad = np.median(np.abs(matrix - median), axis=0) * 1.4826
         valid_dims = mad > 1e-6
+        if not filter_head:
+            # Head movement is intentional in the motion window; only reject
+            # eye-feature outliers there.
+            valid_dims &= np.arange(matrix.shape[1]) < 8
+        z_limit = 4.25 if filter_head else 6.0
+        refine_limit = 4.0 if filter_head else 5.5
         if np.any(valid_dims):
             deviation = np.abs(matrix[:, valid_dims] - median[valid_dims])
             z = deviation / mad[valid_dims]
-            apply_keep(np.max(z, axis=1) <= 4.25)
+            apply_keep(np.max(z, axis=1) <= z_limit)
             if matrix.shape[0] > 2:
-                # One refinement pass with the cleaned data.
                 median = np.median(matrix, axis=0)
                 mad = np.median(np.abs(matrix - median), axis=0) * 1.4826
                 valid_dims = mad > 1e-6
+                if not filter_head:
+                    valid_dims &= np.arange(matrix.shape[1]) < 8
                 if np.any(valid_dims):
                     deviation = np.abs(
                         matrix[:, valid_dims] - median[valid_dims]
                     )
                     z = deviation / mad[valid_dims]
-                    apply_keep(np.max(z, axis=1) <= 4.0)
+                    apply_keep(np.max(z, axis=1) <= refine_limit)
         if matrix.shape[0] < 6:
             return None
         pose_matrix = (
@@ -592,15 +703,36 @@ class CalibrationWindow(QWidget):
         )
         return matrix, pose_matrix
 
+    def _filter_current_samples(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray | None] | None:
+        return self._filter_samples(self._current_samples, filter_head=True)
+
+    def _filter_motion_samples(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray | None] | None:
+        return self._filter_samples(
+            self._current_motion_samples, filter_head=False
+        )
+
     # -------------------------------------------------------------------- timer
     def _tick(self) -> None:
         now = time.monotonic()
         snap = self.tracker.snapshot()
         face_before = self._face_found
         self._face_found = snap.face_found
+        elapsed = now - self._phase_started
         warning_before = self._head_warning
+        stable_for_warning = self._phase in (
+            Phase.SETTLE,
+            Phase.SAMPLE,
+        ) and (
+            self._phase != Phase.SAMPLE or elapsed < self.STABLE_SECONDS
+        )
         self._update_head_warning(
-            snap.features if snap.face_found else None
+            snap.features
+            if snap.face_found and stable_for_warning
+            else None
         )
         if warning_before != self._head_warning:
             self.update(QRect(0, 60, int(self.width()), 34))
@@ -611,7 +743,6 @@ class CalibrationWindow(QWidget):
         else:
             self._face_since = None
 
-        elapsed = now - self._phase_started
         if self.tracker.error_text and self._phase not in (Phase.ERROR, Phase.RESULT):
             self._error_message = self.tracker.error_text
             self._enter(Phase.ERROR)
@@ -630,6 +761,11 @@ class CalibrationWindow(QWidget):
             if elapsed >= self.SETTLE_SECONDS:
                 self._start_sampling()
         elif self._phase == Phase.SAMPLE:
+            if elapsed >= self.STABLE_SECONDS and not self._motion_hint:
+                self._motion_hint = True
+                self.update(
+                    QRect(0, int(self.height()) - 60, int(self.width()), 34)
+                )
             self._collect(snap)
             if elapsed >= self.SAMPLE_SECONDS:
                 self._finish_point()
@@ -672,7 +808,7 @@ class CalibrationWindow(QWidget):
                 origin = self.screen.geometry().topLeft()
                 x = int(gx - origin.x())
                 y = int(gy - origin.y())
-                self.update(QRect(x - 38, y - 38, 76, 76))
+                self.update(QRect(x - 55, y - 55, 110, 110))
         elif self._phase == Phase.FIT:
             self.update(
                 QRect(
@@ -703,16 +839,17 @@ class CalibrationWindow(QWidget):
             return
         if snap.openness < 0.045:
             return
-        if self._head_warning:
-            return
         features = np.asarray(snap.features, dtype=np.float64)
         if features.shape != (len(FEATURE_NAMES),):
             return
         if not np.all(np.isfinite(features)):
             return
-        self._current_samples.append(
-            (features, float(snap.openness), snap.head_pose)
-        )
+        elapsed = time.monotonic() - self._phase_started
+        entry = (features, float(snap.openness), snap.head_pose)
+        if elapsed < self.STABLE_SECONDS:
+            self._current_samples.append(entry)
+        else:
+            self._current_motion_samples.append(entry)
         self._all_openness.append(float(snap.openness))
 
     # -------------------------------------------------------------------- paint
@@ -785,7 +922,10 @@ class CalibrationWindow(QWidget):
         elif self._validating:
             subtitle = "Accuracy check — look at each dot with your eyes only."
         else:
-            subtitle = "Look at each dot with your eyes only. Keep your head still."
+            subtitle = (
+                "Hold still, then slowly move your head left and right while "
+                "keeping your eyes on the dot."
+            )
         painter.setPen(subtitle_color)
         painter.drawText(
             QRectF(0, 66, width, 24),
@@ -839,11 +979,17 @@ class CalibrationWindow(QWidget):
         )
 
         if self._phase == Phase.SETTLE or self._phase == Phase.SAMPLE:
-            hint = (
-                "Hold your gaze — sampling…"
-                if self._phase == Phase.SAMPLE
-                else "Look at the highlighted dot…"
-            )
+            if self._phase == Phase.SAMPLE:
+                sample_elapsed = time.monotonic() - self._phase_started
+                if sample_elapsed < self.STABLE_SECONDS:
+                    hint = "Hold your gaze — sampling stable position…"
+                else:
+                    hint = (
+                        "Keep your eyes on the dot — slowly move your head "
+                        "left and right…"
+                    )
+            else:
+                hint = "Look at the highlighted dot…"
             if self._validating:
                 hint = "Accuracy check · " + hint
             if self._head_warning:
@@ -948,14 +1094,14 @@ class CalibrationWindow(QWidget):
             ):
                 elapsed = time.monotonic() - self._phase_started
                 pulse = 0.5 + 0.5 * math.sin(elapsed * 6.5)
-                halo = QRadialGradient(point, 32)
+                halo = QRadialGradient(point, 46)
                 halo.setColorAt(
                     0.0,
                     QColor(
                         active_rgb[0],
                         active_rgb[1],
                         active_rgb[2],
-                        int(45 + 35 * pulse),
+                        int(60 + 55 * pulse),
                     ),
                 )
                 halo.setColorAt(
@@ -963,7 +1109,7 @@ class CalibrationWindow(QWidget):
                 )
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(halo)
-                painter.drawEllipse(point, 32, 32)
+                painter.drawEllipse(point, 46, 46)
 
                 duration = (
                     self.SETTLE_SECONDS
@@ -974,27 +1120,27 @@ class CalibrationWindow(QWidget):
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.setPen(
                     QPen(
-                        QColor(active_rgb[0], active_rgb[1], active_rgb[2], 60),
-                        2,
+                        QColor(active_rgb[0], active_rgb[1], active_rgb[2], 80),
+                        2.5,
                     )
                 )
-                painter.drawEllipse(point, 20, 20)
+                painter.drawEllipse(point, 26, 26)
                 painter.setPen(
                     QPen(
                         active,
-                        2.5,
+                        3.0,
                         Qt.PenStyle.SolidLine,
                         Qt.PenCapStyle.RoundCap,
                     )
                 )
                 painter.drawArc(
-                    QRectF(point.x() - 20, point.y() - 20, 40, 40),
+                    QRectF(point.x() - 26, point.y() - 26, 52, 52),
                     90 * 16,
                     -int(360 * 16 * progress),
                 )
                 painter.setBrush(QColor(235, 249, 255))
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.drawEllipse(point, 4.5, 4.5)
+                painter.drawEllipse(point, 5.5, 5.5)
             else:
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.setPen(
@@ -1036,8 +1182,11 @@ class CalibrationWindow(QWidget):
             | Qt.TextFlag.TextWordWrap,
             "Sit at a comfortable distance from the screen. Your face should be "
             "well lit and fully visible in the camera preview. You will look at "
-            "25 dots, then 9 accuracy-check dots (about 50 seconds). The "
-            "calibration starts automatically once your face is detected.",
+            "25 dots, then 9 accuracy-check dots (about 80 seconds). For each "
+            "dot, hold still for a moment, then slowly move your head a little "
+            "left and right while keeping your eyes on it. This teaches head-"
+            "position compensation. The calibration starts automatically once "
+            "your face is detected.",
         )
         hint_color = BRAND_SOFT if self._face_found else QColor(148, 163, 184)
         painter.setPen(hint_color)
@@ -1203,14 +1352,22 @@ class CalibrationWindow(QWidget):
         painter.drawText(
             QRectF(card.left() + 24, card.bottom() - 62, card.width() - 48, 24),
             Qt.AlignmentFlag.AlignHCenter,
-            "Enter  —  use this calibration",
+            (
+                "Enter  —  use this calibration"
+                if good
+                else "R  —  try again"
+            ),
         )
         painter.setPen(MUTED)
         painter.setFont(QFont("Segoe UI", 9))
         painter.drawText(
             QRectF(card.left() + 24, card.bottom() - 34, card.width() - 48, 22),
             Qt.AlignmentFlag.AlignHCenter,
-            "R — start over    ·    Esc — cancel",
+            (
+                "R — start over    ·    Esc — cancel"
+                if good
+                else "Esc — cancel"
+            ),
         )
 
     def _paint_error(self, painter: QPainter, width: float, height: float) -> None:

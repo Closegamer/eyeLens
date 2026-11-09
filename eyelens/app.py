@@ -344,8 +344,10 @@ class EyeLensApp(QObject):
                 info.calibration_detail = tracker.error_text
             else:
                 info.calibration_detail = (
-                    "Look at 25 dots plus 9 accuracy-check dots for about 50 "
-                    "seconds to teach eyeLens how your eyes map to this screen."
+                    "Look at 25 dots plus 9 accuracy-check dots for about 80 "
+                    "seconds. Hold still, then slowly move your head left and "
+                    "right on each dot so eyeLens learns head-position "
+                    "compensation."
                 )
             info.can_calibrate = (
                 tracker is not None

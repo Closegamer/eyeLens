@@ -250,7 +250,7 @@ class SettingsWindow(QWidget):
         titles.addWidget(title)
         titles.addWidget(subtitle)
         header.addLayout(titles, 1)
-        version = QLabel("v0.7")
+        version = QLabel("v0.8")
         version.setObjectName("badge")
         header.addWidget(version, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(header)
@@ -400,11 +400,12 @@ class SettingsWindow(QWidget):
         calibration_title.setObjectName("section")
         calibration_layout.addWidget(calibration_title)
         self.calibration_help = QLabel(
-            "Look at 25 dots, then 9 accuracy-check dots (about 50 seconds). "
-            "eyeLens learns how your eyes map to this screen and reports the "
-            "error it measured. If the lens sits off target later, press "
-            "Ctrl+Alt+D and drag the handle to where you are looking. Your "
-            "camera feed never leaves this computer."
+            "Look at 25 dots, then 9 accuracy-check dots (about 80 seconds). "
+            "For each dot, hold still for a moment, then slowly move your head "
+            "left and right while keeping your eyes on it. eyeLens learns how "
+            "your eyes map to this screen, including head-position changes, and "
+            "reports the error it measured. Your camera feed never leaves this "
+            "computer."
         )
         self.calibration_help.setObjectName("muted")
         self.calibration_help.setWordWrap(True)

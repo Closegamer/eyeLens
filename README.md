@@ -20,7 +20,7 @@ to read, then unfreeze it and continue working.
 ## Features
 
 - **Webcam eye tracking** — no special hardware, no IR tracker, no cloud.
-- **Guided 25-point calibration + 9-point accuracy check** — about 50 seconds,
+- **Guided 25-point calibration + 9-point accuracy check** — about 80 seconds,
   saveable and reusable. The result screen shows the error measured on the
   independent check points.
 - **Zoomed eye preview** — calibration shows a large close-up of both eyes plus
@@ -86,10 +86,11 @@ In demo mode the lens follows the mouse pointer instead of your eyes.
 2. Click **Calibrate now**. Keep your face fully visible and avoid backlighting.
    The large **EYES** panel is a zoomed view of both eyes; the small **FACE**
    inset shows the whole camera frame so you can check your framing.
-3. Look at each of the 25 dots **with your eyes only** while keeping your head
-   still. If the header says **“Head moved”**, return to your starting head
-   position; samples for that dot pause until you do. The dot turns into a
-   progress ring while samples are collected.
+3. Look at each of the 25 dots **with your eyes only**. For every dot, hold still
+   for a moment, then slowly move your head a little left and right while keeping
+   your eyes on the dot. This second part teaches the head-position correction.
+   If the header says **“Head moved”**, return to your starting head position.
+   The dot turns into a progress ring while samples are collected.
 4. After the 25th dot, eyeLens repeats a short 9-dot **accuracy check** on
    points it did not train on. This measures the real error instead of guessing.
 5. When the result appears, press **Enter** to keep the calibration or **R** to
@@ -164,13 +165,14 @@ A few implementation details that matter:
   translation features are kept for diagnostics and for the live “head moved”
   calibration warning; using them as predictors made held-out accuracy much
   worse on real calibration data.
-- Head pose (face forward vector + translation) is collected with every sample.
-  A strongly regularised global correction is fitted on the primary residuals
-  and enabled only if it improves the 9 held-out points by at least 3% and
-  5 px. This is the layer that recalculates the mapping when your head moves.
-- Calibration shuffles the dot order and watches the head pose. If you drift
-  from the starting position, it warns and stops collecting samples for that
-  point, then retries it.
+- Each calibration dot has a stable-head part and a slow head-movement part.
+  The base eye-only model uses the stable frames; a global pose correction is
+  fitted on the moved frames' residuals and enabled only if it improves the
+  combined held-out error by at least 5% and 10 px. This is the layer that
+  recalculates the mapping when your head moves.
+- Calibration uses a predictable centre-out dot order and watches the head pose.
+  If you drift, it warns you but keeps collecting; the optional pose correction
+  can compensate for head movement afterwards.
 - Eye measurements are made in a rotated eye frame, so a tilted head does not
   fake vertical gaze or a blink.
 - Calibration keeps every stable frame from each target (usually several hundred
@@ -223,9 +225,9 @@ The zoomed view needs a detected face. Use the small FACE inset to centre your
 face, improve the lighting, and wait for the status pill to turn green.
 
 **The lens drifts or jumps.**
-Recalibrate. Keep your head still during calibration and look at the centre of
-each dot. Increase **Smoothing** if the lens jitters or moves too quickly;
-decrease it if it feels sluggish.
+Recalibrate. For each dot, hold still for the first part, then move your head
+slowly in the second part. Increase **Smoothing** if the lens jitters or moves
+too quickly; decrease it if it feels sluggish.
 
 **The lens is still slightly off in one area.**
 Press `Ctrl+Alt+D`, drag the small handle to where you are actually looking,
@@ -233,10 +235,11 @@ and release. eyeLens stores a local correction and keeps it. Repeat in other
 screen regions if needed. Recalibrate to discard all corrections and start over.
 
 **The lens drifts when I move my head.**
-Recalibrate. Calibration records your head pose at every dot and adds a global
-head-pose correction if it improves the 9 held-out points by at least 3% and
-5 px. When that correction is active, the status shows **head pose**. If it is
-not shown, the eye-only mapping was more accurate for your data.
+Recalibrate. During each dot, hold still for the first part, then slowly move
+your head a little left and right while keeping your eyes on the dot. Calibration
+adds a global head-pose correction if it improves the combined held-out error by
+at least 5% and 10 px. When active, the status shows **head pose**. If it is not
+shown, the eye-only mapping was more accurate for your data.
 
 **The lens shows a mirror image of itself.**
 This should not happen on Windows 10 2004+ / Windows 11. If you see a warning in
