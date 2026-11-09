@@ -43,10 +43,6 @@
 
 - `README.md` — product overview, stable+motion calibration, controls, architecture.
 - `models/README.md` — MediaPipe model source and license.
-- `plans/handoffs/HANDOFF_eyelens-eye-only-model_2026-11-09.md` — real-data
-  feature-subset diagnosis that led to the eye-only model.
-- `plans/handoffs/HANDOFF_eyelens-head-pose_2026-11-09.md` — v0.7 pose attempt
-  and why it failed.
 
 ## The Goal
 
@@ -348,11 +344,7 @@ Recent commits on `main` (v0.8 session):
   poor validation. The quality gate prevents saving a bad result, but the user
   may have to retry.
 - The current machine has **no valid calibration**; the app will start
-  “Not calibrated”. The old v0.7 file is intentionally rejected.
-- The 80 s calibration is longer; head drift/fatigue may affect the later dots.
-  Centre-out + stable/motion + the head warning are the mitigations.
-- The head-motion part may be hard to follow; if the user moves too much, the
-  motion samples/motion validation can be noisy.
+  "Not calibrated". The old v0.7 file is intentionally rejected.
 - The linear pose correction may be insufficient for large head movement; a 3D
   model remains the fallback.
 - Real Windows mouse drag of the correction handle is still unverified.
@@ -397,3 +389,12 @@ run.bat
 #   Complete the stable+motion recalibration and record the validation error
 #   and pose_weight. This is the decisive test of v0.8.
 ```
+
+## Session Closed
+
+**Closed at:** 2026-11-10T00:28:08+03:00
+**Commit:** `session: close eyelens-stable-motion [standalone-08a28c4a]`
+(includes this note)
+**Session status:** Handed off to the next session. The user will run the
+stable+motion recalibration. `continue_session.md` is the automatic entry point;
+no paste prompt is needed.
