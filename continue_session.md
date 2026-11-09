@@ -1,50 +1,48 @@
 # eyeLens — Continue Session
 
-**Memory:** `plans/handoffs/HANDOFF_eyelens-eye-only-model_2026-11-09.md`
-**Status:** v0.6.0 implemented, tested and pushed. Nothing running. Restart and
-re-test; a fresh real-face calibration is the next acceptance test.
+**Memory:** `plans/handoffs/HANDOFF_eyelens-head-pose_2026-11-09.md`
+**Status:** v0.7.0 implemented, tested and pushed. Nothing running. A fresh
+real-face recalibration is required to collect head pose and enable the pose
+correction.
 **Repo:** `https://github.com/Closegamer/eyeLens` (private, branch `main`)
-**Code commit:** `fcc4b60` · follow-up `1cfe01f` · tag `v0.6.0`
-**Chain:** `standalone-08a28c4a` seq 6
+**Code commit:** `3586510` · tag `v0.7.0`
+**Chain:** `standalone-08a28c4a` seq 7
 
-## What changed in v0.6.0
+## What changed in v0.7.0
 
-- **The gaze model now fits only the 8 eye-in-head features** (iris positions,
-  iris average, vergence). Real calibration data showed the old all-14 model
-  had held-out error **234 px**; eye-only is **~104 px (LOO 93)**.
-- Raw head/face features were learning slow head drift as a gaze cue. They are
-  still saved for diagnostics and for the head-still warning, but are masked
-  from the fitted model.
-- **Existing calibration files are refitted with the eye-only model on load.**
-  Their stale validation number and old drag corrections are dropped. On this
-  machine the old calibration now shows **“Good · ±93 px”** (estimated) instead
-  of 234 px.
-- **Calibration order is now centre-first plus a fixed shuffle**, so slow head
-  drift is spread across the screen.
-- **Head-drift warning**: the first point sets a head baseline; if the user
-  drifts, the header/bottom hint says “Head moved — return to your starting head
-  position” and sampling pauses for that point.
-- Version `0.6.0`.
+- MediaPipe now outputs the **6-DOF facial transformation matrix**. The tracker
+  extracts the face forward vector and head translation with every frame.
+- Calibration records head pose per sample. After the 9 validation points, a
+  global ridge **head-pose correction** is fitted on the primary residuals.
+- The correction is enabled only if it improves the held-out validation by at
+  least **3% and 5 px**; otherwise it is off and the eye-only model is used.
+- At runtime the pose correction changes with head position, recalculating the
+  mapping as the head moves.
+- New calibration files store `pose_samples`/`pose_alpha`/`pose_weight`; the
+  summary shows **head pose** when active.
+- Old calibrations without pose still load eye-only. **Recalibrate once** to
+  collect pose.
+- Version `0.7.0`.
 
 ## What is next
 
-1. Restart eyeLens. The existing calibration refits eye-only and should be
-   noticeably better without recalibrating.
-2. If still off, recalibrate to get the shuffled order and head-drift warning.
-   Re-do mouse corrections afterward; the old ones were discarded.
-3. If accuracy is still not enough, next options:
-   - denser 6×6/7×7 calibration grid;
-   - MediaPipe head-pose (facial transformation matrix) features;
-   - crop-based landmark inference on the eye region.
-4. Real-face calibration and mouse-correction quality remain the pending tests.
+1. Restart eyeLens, recalibrate once, keep the head still during calibration.
+2. Check the result summary for **head pose**.
+3. Test moving the head slightly while looking at the same screen point.
+4. If pose correction is not selected but head movement still hurts, the next
+   step is a proper 3D gaze/head model (eye position + gaze ray intersection
+   with the screen plane), not a linear residual.
+5. If selected, tune `POSE_ALPHAS` / the 3%+5 px threshold.
+6. Denser grid and crop-based eye landmark inference remain options for the
+   base ~90–100 px error floor.
 
 ## Exact state
 
 - Virtualenv: `C:\a_REPOS\eyeLense\.venv` (Python 3.12).
-- Version: `0.6.0`.
-- Tests: 31 passed; ruff clean; smoke test exit 0; synthetic calibration E2E
-  passes; old real calibration loads with LOO 93 and 0 corrections.
+- Version: `0.7.0`.
+- Tests: 34 passed; ruff clean; smoke test exit 0; synthetic pose calibration E2E
+  passes; pose save/load test passes.
 - `Modelfile` in the repo root is still an unrelated pre-existing file; leave it
   untracked.
-- This memory file and the v0.6 handoff are committed in the session commit
-  after `fcc4b60`.
+- This memory file and the v0.7 handoff are committed in the session commit
+  after `3586510`.
