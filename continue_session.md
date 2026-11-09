@@ -1,48 +1,44 @@
 # eyeLens — Continue Session
 
-**Memory:** `plans/handoffs/HANDOFF_eyelens-mouse-correction_2026-11-09.md`
-**Status:** v0.3.0 implemented, tested and pushed. Nothing running. Real-mouse and
-real-face correction quality are the first pending tests.
+**Memory:** `plans/handoffs/HANDOFF_eyelens-shapes-big-lens_2026-11-09.md`
+**Status:** v0.4.0 implemented, tested and pushed. Nothing running. Real desktop
+visual check and real-face calibration are the pending tests.
 **Repo:** `https://github.com/Closegamer/eyeLens` (private, branch `main`)
-**Code commit:** `9500bd7` · follow-up `632cd1e` · tag `v0.3.0`
-**Chain:** `standalone-08a28c4a` seq 3
+**Code commit:** `d0d9454` · tag `v0.4.0`
+**Chain:** `standalone-08a28c4a` seq 4
 
-## What changed in v0.3.0
+## What changed in v0.4.0
 
-- **Mouse correction**: press `Ctrl+Alt+D` (or tray **Correct lens position…**,
-  or settings **Fix position**). A small draggable handle appears at the lens
-  centre. Drag it to where you are actually looking and release. The lens holds
-  that spot for 0.65 s, captures a robust recent feature vector, stores a local
-  residual correction, recenters the engine, and saves the calibration.
-- The full-screen lens stays click-through; only the 48×48 handle captures the
-  mouse, so the rest of the desktop remains usable.
-- The correction is an RBF-weighted local memory on top of the fitted model, not
-  a full recalibration. It applies where the user corrected, decays elsewhere,
-  replaces nearby older corrections, is capped at 64 centres, and is persisted
-  in `calibration.json`.
-- Tracker history (`recent_features`) supplies a median open-eye feature vector
-  from the hold window.
-- Version `0.3.0`.
+- **Lens shape choice** in Settings → Lens → Shape:
+  - Round (ellipse)
+  - Square (rounded rectangle)
+  - Wide (1.6× wider rounded rectangle)
+- **Size range** is now 120–1200 px high. Wide lenses can be up to 1920 px wide.
+- **Big lens on demand**: `Ctrl+Alt+B`, tray **Big lens**, or settings **Big
+  lens**. It toggles to 85% of the screen height and back to the previous size.
+- Capture is now rectangular (`CaptureRequest` carries width/height), so wide
+  lenses capture a wide source without stretching.
+- Overlay shadow/vignette/ring/OSD/loading all follow the selected shape.
+- Shape is persisted in `settings.json`; old settings default to Round.
+- Version `0.4.0`.
 
 ## What is next
 
-1. Run `run.bat`, calibrate, then press `Ctrl+Alt+D`, drag the handle, release,
-   and hold your gaze on the lens. Confirm the lens stays corrected afterward.
-2. If the handle does not receive mouse drags on Windows, inspect the handle
-   exstyles (`WS_EX_NOACTIVATE`, tool window). The handle is expected to receive
-   clicks without activating.
-3. Tune `_CORRECTION_GAMMA` / `_CORRECTION_SIMILARITY` in
-   `eyelens/gaze/model.py` if corrections feel too broad/narrow or replace too
-   aggressively.
-4. The earlier v0.2 calibration work still needs a real-face accuracy test;
-   read `HANDOFF_eyelens-calibration-v2_2026-11-09.md` for the model details.
+1. Run `run.bat`, switch between Round / Square / Wide, and try `Ctrl+Alt+B`.
+   Check the real shadow, vignette, corner radius, and wide capture at max size.
+2. If 1.6× wide is not the right aspect, change `Settings.WIDE_ASPECT`.
+3. If square/wide corners should be sharp, set the corner radius to 0 in
+   `LensOverlay._lens_path`.
+4. Real-face calibration and mouse-correction quality are still pending from
+   v0.2/v0.3. Read the prior handoffs for those.
 
 ## Exact state
 
 - Virtualenv: `C:\a_REPOS\eyeLense\.venv` (Python 3.12).
-- Version: `0.3.0`.
-- Tests: 26 passed; ruff clean; smoke test exit 0.
+- Version: `0.4.0`.
+- Tests: 28 passed; ruff clean; smoke test exit 0; offscreen render checks for
+  all three shapes pass.
 - `Modelfile` in the repo root is still an unrelated pre-existing file; leave it
   untracked.
-- This memory file and the v0.3 handoff are committed in the session commit
-  after `9500bd7`.
+- This memory file and the v0.4 handoff are committed in the session commit
+  after `d0d9454`.
