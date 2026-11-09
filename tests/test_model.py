@@ -80,14 +80,87 @@ def test_is_eye_open_uses_calibration_threshold() -> None:
     assert not model.is_eye_open(0.01)
 
 
+def test_independent_validation_error_is_used() -> None:
+    samples, targets, point_ids = make_dataset()
+    model = GazeModel.fit(
+        samples,
+        targets,
+        point_ids,
+        0.12,
+        SCREEN.to_dict(),
+        validation_rmse=42.0,
+        validation_points=9,
+    )
+    assert model.metrics.validation_rmse == 42.0
+    assert model.metrics.validation_points == 9
+    assert model.error_rmse == 42.0
+    assert model.summary().endswith("±42 px")
+
+
+def test_hybrid_uses_kernel_stage_for_nonlinear_mapping() -> None:
+    rng = np.random.default_rng(11)
+    width, height = 1920, 1200
+    samples: list[np.ndarray] = []
+    targets: list[list[float]] = []
+    point_ids: list[int] = []
+    point = 0
+    for y in np.linspace(height * 0.12, height * 0.88, 5):
+        for x in np.linspace(width * 0.08, width * 0.92, 5):
+            for _ in range(12):
+                nx = x / width - 0.5
+                ny = y / height - 0.5
+                iris_x = 0.5 + 0.40 * np.tanh(2.0 * nx) + rng.normal(0, 0.003)
+                iris_y = 0.5 + 0.40 * np.tanh(2.0 * ny) + rng.normal(0, 0.003)
+                values = np.zeros(len(FEATURE_NAMES))
+                values[0] = values[2] = values[4] = iris_x
+                values[1] = values[3] = values[5] = iris_y
+                values[8] = 0.08 * nx + rng.normal(0, 0.002)
+                values[9] = 0.05 * ny + rng.normal(0, 0.002)
+                values[10] = rng.normal(0, 0.002)
+                values[11] = 0.06 * nx + rng.normal(0, 0.002)
+                values[12] = 0.04 * ny + rng.normal(0, 0.002)
+                values[13] = 0.5
+                # A cubic term is deliberately outside the polynomial basis.
+                target_x = width * (
+                    0.5 + 0.45 * (nx + 0.25 * nx**3) + 0.05 * values[8]
+                )
+                target_y = height * (
+                    0.5 + 0.45 * (ny + 0.25 * ny**3) + 0.05 * values[9]
+                )
+                samples.append(values)
+                targets.append([target_x, target_y])
+                point_ids.append(point)
+            point += 1
+
+    model = GazeModel.fit(
+        np.asarray(samples),
+        np.asarray(targets),
+        np.asarray(point_ids, dtype=np.int64),
+        0.12,
+        SCREEN.to_dict(),
+    )
+    assert model.metrics.krr_weight > 0.0
+    assert model.metrics.loo_rmse < 40.0
+
+
 def test_save_and_load_roundtrip(tmp_path) -> None:
     samples, targets, point_ids = make_dataset()
-    model = GazeModel.fit(samples, targets, point_ids, 0.12, SCREEN.to_dict())
+    model = GazeModel.fit(
+        samples,
+        targets,
+        point_ids,
+        0.12,
+        SCREEN.to_dict(),
+        validation_rmse=37.0,
+        validation_points=9,
+    )
     path = tmp_path / "calibration.json"
     model.save(path)
     loaded = GazeModel.load(path)
     assert loaded is not None
     assert loaded.metrics.n_points == model.metrics.n_points
+    assert loaded.metrics.validation_rmse == 37.0
+    assert loaded.metrics.validation_points == 9
     prediction_a = model.predict(samples[0])
     prediction_b = loaded.predict(samples[0])
     assert abs(prediction_a.x - prediction_b.x) < 1e-6

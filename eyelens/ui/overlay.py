@@ -23,7 +23,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
-from ..capture import ScreenCapture
+from ..capture import ScreenCapture, source_extent
 from ..config import ScreenInfo, Settings
 from ..gaze.engine import GazeEngine
 
@@ -141,6 +141,7 @@ class LensOverlay(QWidget):
         super().showEvent(event)
         self.setGeometry(self.screen.geometry())
         self._visibility = 0.0
+        self._has_gaze = False
         self._last_paint_state = None
         self._last_bounds = QRectF()
         self._last_tick = time.monotonic()
@@ -246,11 +247,13 @@ class LensOverlay(QWidget):
                 valid = True
 
         if valid and target is not None:
-            if not self._has_gaze or self._visibility < 0.05:
+            if not self._has_gaze:
                 self._display_center = target
                 self._has_gaze = True
             else:
-                factor = 1.0 - math.exp(-dt / 0.022)
+                # Deliberately relaxed follow time constant: the lens should
+                # glide after the eyes instead of chasing every tracker jitter.
+                factor = 1.0 - math.exp(-dt / 0.085)
                 self._display_center += (target - self._display_center) * factor
         if valid:
             self._has_gaze = True
@@ -421,8 +424,8 @@ class LensOverlay(QWidget):
         image = frame.image
         if image is None or image.isNull():
             return
-        source_w = diameter * zoom * frame.scale_x
-        source_h = diameter * zoom * frame.scale_y
+        source_w = source_extent(diameter, zoom) * frame.scale_x
+        source_h = source_extent(diameter, zoom) * frame.scale_y
         src = QRectF(
             frame.center_x - source_w / 2.0,
             frame.center_y - source_h / 2.0,

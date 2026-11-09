@@ -10,6 +10,6 @@ os.environ.setdefault("GLOG_minloglevel", "2")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __app_name__ = "eyeLens"
 

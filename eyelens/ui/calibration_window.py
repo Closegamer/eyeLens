@@ -55,9 +55,11 @@ class CalibrationWindow(QWidget):
     GRID_X = (0.05, 0.275, 0.5, 0.725, 0.95)
     GRID_Y_TOP = 0.16
     GRID_Y_BOTTOM = 0.90
-    SETTLE_SECONDS = 0.45
-    SAMPLE_SECONDS = 1.05
-    RETRY_SECONDS = 1.35
+    VALIDATION_GRID_X = (0.16, 0.5, 0.84)
+    VALIDATION_GRID_Y = (0.28, 0.55, 0.82)
+    SETTLE_SECONDS = 0.50
+    SAMPLE_SECONDS = 1.20
+    RETRY_SECONDS = 1.50
     COUNTDOWN_SECONDS = 2.0
 
     def __init__(
@@ -84,7 +86,6 @@ class CalibrationWindow(QWidget):
         self._phase = Phase.INTRO
         self._phase_started = time.monotonic()
         self._point_index = 0
-        self._point_ids: list[int] = []
         self._retried = False
         self._retry_reason = ""
         self._current_samples: list[tuple[np.ndarray, float]] = []
@@ -97,10 +98,18 @@ class CalibrationWindow(QWidget):
         self._face_since: float | None = None
         self._preview: QImage | None = None
         self._model: GazeModel | None = None
+        self._primary_model: GazeModel | None = None
         self._error_message = ""
         self._done = False
         self._fit_started = False
-        self._points = self._build_points()
+        self._fit_stage = "primary"
+        self._validating = False
+        self._validation_start = 0
+        self._countdown_seconds = self.COUNTDOWN_SECONDS
+        self._countdown_note = "Get comfortable and keep looking at the screen"
+        self._primary_points = self._build_points()
+        self._validation_points = self._build_validation_points()
+        self._points = self._primary_points
 
         self._timer = QTimer(self)
         self._timer.setInterval(16)
@@ -108,6 +117,24 @@ class CalibrationWindow(QWidget):
         self._timer.start()
 
     # ---------------------------------------------------------------- geometry
+    @staticmethod
+    def _center_out(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+        if not points:
+            return points
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        center_x = (min(xs) + max(xs)) * 0.5
+        center_y = (min(ys) + max(ys)) * 0.5
+        scale_x = max(max(xs) - min(xs), 1.0)
+        scale_y = max(max(ys) - min(ys), 1.0)
+
+        def key(point: tuple[float, float]) -> tuple[float, float]:
+            dx = (point[0] - center_x) / scale_x
+            dy = (point[1] - center_y) / scale_y
+            return (round(dx * dx + dy * dy, 6), math.atan2(dy, dx))
+
+        return sorted(points, key=key)
+
     def _build_points(self) -> list[tuple[float, float]]:
         geometry = self.screen.geometry()
         width = float(geometry.width())
@@ -119,7 +146,22 @@ class CalibrationWindow(QWidget):
             geometry.top() + top_y + (bottom_y - top_y) * index / 4.0
             for index in range(5)
         ]
-        return [(x, y) for y in ys for x in xs]
+        return self._center_out([(x, y) for y in ys for x in xs])
+
+    def _build_validation_points(self) -> list[tuple[float, float]]:
+        geometry = self.screen.geometry()
+        width = float(geometry.width())
+        height = float(geometry.height())
+        top_y = max(height * self.GRID_Y_TOP, 195.0)
+        bottom_y = height * self.GRID_Y_BOTTOM
+        xs = [
+            geometry.left() + width * frac for frac in self.VALIDATION_GRID_X
+        ]
+        ys = [
+            geometry.top() + top_y + (bottom_y - top_y) * frac
+            for frac in self.VALIDATION_GRID_Y
+        ]
+        return self._center_out([(x, y) for y in ys for x in xs])
 
     # --------------------------------------------------------------- lifecycle
     def showEvent(self, event) -> None:
@@ -220,8 +262,15 @@ class CalibrationWindow(QWidget):
         self._point_id_list = []
         self._all_openness = []
         self._model = None
+        self._primary_model = None
         self._error_message = ""
         self._fit_started = False
+        self._fit_stage = "primary"
+        self._validating = False
+        self._validation_start = 0
+        self._countdown_seconds = self.COUNTDOWN_SECONDS
+        self._countdown_note = "Get comfortable and keep looking at the screen"
+        self._points = self._primary_points
         self._begin_countdown()
 
     def _start_point(self) -> None:
@@ -231,6 +280,22 @@ class CalibrationWindow(QWidget):
 
     def _start_sampling(self) -> None:
         self._enter(Phase.SAMPLE)
+
+    def _start_validation(self, primary: GazeModel) -> None:
+        self._primary_model = primary
+        self._validating = True
+        self._points = self._validation_points
+        self._point_index = 0
+        self._retried = False
+        self._retry_reason = ""
+        self._current_samples = []
+        self._last_seq = -1
+        self._validation_start = len(self._samples)
+        self._fit_started = False
+        self._fit_stage = "final"
+        self._countdown_seconds = 1.5
+        self._countdown_note = "Accuracy check — keep looking at the screen"
+        self._begin_countdown()
 
     def _finish_point(self) -> None:
         accepted = self._filter_current_samples()
@@ -252,19 +317,88 @@ class CalibrationWindow(QWidget):
             return
 
         target = self._points[self._point_index]
+        point_id = self._point_index + (
+            len(self._primary_points) if self._validating else 0
+        )
         for row in accepted:
             self._samples.append(row)
             self._targets.append([target[0], target[1]])
-            self._point_id_list.append(self._point_index)
-        self._point_ids.append(self._point_index)
+            self._point_id_list.append(point_id)
         self._point_index += 1
         self._retried = False
         self._retry_reason = ""
 
         if self._point_index >= len(self._points):
+            self._fit_started = False
             self._enter(Phase.FIT)
         else:
             self._start_point()
+
+    def _validation_error(self, model: GazeModel) -> float:
+        start = self._validation_start
+        if start >= len(self._samples):
+            return 0.0
+        samples = self._samples[start:]
+        targets = np.asarray(self._targets[start:], dtype=np.float64)
+        point_ids = np.asarray(self._point_id_list[start:], dtype=np.int64)
+        predictions = np.asarray(
+            [
+                [prediction.x, prediction.y]
+                for prediction in (model.predict(row) for row in samples)
+            ],
+            dtype=np.float64,
+        )
+        per_point: dict[int, float] = {}
+        for point in np.unique(point_ids):
+            mask = point_ids == point
+            error = predictions[mask] - targets[mask]
+            per_point[int(point)] = float(np.mean(np.sum(np.square(error), axis=1)))
+        if not per_point:
+            return 0.0
+        return float(np.sqrt(np.mean(list(per_point.values()))))
+
+    def _fit_model(self) -> None:
+        if self._fit_started:
+            return
+        self._fit_started = True
+        try:
+            samples = np.vstack(self._samples)
+            targets = np.asarray(self._targets, dtype=np.float64)
+            point_ids = np.asarray(self._point_id_list, dtype=np.int64)
+            openness = np.asarray(self._all_openness, dtype=np.float64)
+            threshold = max(0.07, float(np.median(openness)) * 0.55)
+            info = screen_info(self.screen).to_dict()
+
+            if self._fit_stage == "primary":
+                self._primary_model = GazeModel.fit(
+                    samples=samples,
+                    targets=targets,
+                    point_ids=point_ids,
+                    openness_threshold=threshold,
+                    screen=info,
+                )
+                self._start_validation(self._primary_model)
+                return
+
+            validation_rmse = 0.0
+            if self._primary_model is not None:
+                validation_rmse = self._validation_error(self._primary_model)
+            self._model = GazeModel.fit(
+                samples=samples,
+                targets=targets,
+                point_ids=point_ids,
+                openness_threshold=threshold,
+                screen=info,
+                validation_rmse=validation_rmse,
+                validation_points=len(self._validation_points),
+            )
+            # Keep all dots visible and completed on the result screen.
+            self._points = self._primary_points + self._validation_points
+            self._point_index = len(self._points)
+            self._enter(Phase.RESULT)
+        except (ValueError, IndexError) as exc:
+            self._error_message = f"Could not build the calibration model: {exc}"
+            self._enter(Phase.ERROR)
 
     def _filter_current_samples(self) -> np.ndarray | None:
         if len(self._current_samples) < 7:
@@ -300,29 +434,6 @@ class CalibrationWindow(QWidget):
                     matrix = matrix[keep]
         return matrix if matrix.shape[0] >= 6 else None
 
-    def _fit_model(self) -> None:
-        if self._fit_started:
-            return
-        self._fit_started = True
-        try:
-            samples = np.vstack(self._samples)
-            targets = np.asarray(self._targets, dtype=np.float64)
-            point_ids = np.asarray(self._point_id_list, dtype=np.int64)
-            openness = np.asarray(self._all_openness, dtype=np.float64)
-            threshold = max(0.07, float(np.median(openness)) * 0.55)
-            info = screen_info(self.screen).to_dict()
-            self._model = GazeModel.fit(
-                samples=samples,
-                targets=targets,
-                point_ids=point_ids,
-                openness_threshold=threshold,
-                screen=info,
-            )
-            self._enter(Phase.RESULT)
-        except (ValueError, IndexError) as exc:
-            self._error_message = f"Could not build the calibration model: {exc}"
-            self._enter(Phase.ERROR)
-
     # -------------------------------------------------------------------- timer
     def _tick(self) -> None:
         now = time.monotonic()
@@ -348,7 +459,7 @@ class CalibrationWindow(QWidget):
         ):
             self._begin_countdown()
         elif self._phase == Phase.COUNTDOWN:
-            if elapsed >= self.COUNTDOWN_SECONDS:
+            if elapsed >= self._countdown_seconds:
                 self._start_point()
         elif self._phase == Phase.SETTLE:
             if elapsed >= self.SETTLE_SECONDS:
@@ -474,10 +585,22 @@ class CalibrationWindow(QWidget):
         )
         painter.setFont(QFont("Segoe UI", 10))
         painter.setPen(MUTED)
+        if self._phase == Phase.RESULT:
+            subtitle = "Calibration complete — this is the accuracy it measured."
+        elif self._phase == Phase.FIT:
+            subtitle = (
+                "Finishing your calibration…"
+                if self._fit_stage == "final"
+                else "Building your personal gaze model…"
+            )
+        elif self._validating:
+            subtitle = "Accuracy check — look at each dot with your eyes only."
+        else:
+            subtitle = "Look at each dot with your eyes only. Keep your head still."
         painter.drawText(
             QRectF(0, 66, width, 24),
             Qt.AlignmentFlag.AlignHCenter,
-            "Look at each dot with your eyes only. Keep your head still.",
+            subtitle,
         )
 
         # Progress counter + bar.
@@ -489,6 +612,8 @@ class CalibrationWindow(QWidget):
             counter_font.setWeight(QFont.Weight.DemiBold)
             painter.setFont(counter_font)
             text = f"{current} / {total}"
+            if self._validating and self._phase not in (Phase.RESULT, Phase.ERROR):
+                text = f"check {current} / {total}"
             if self._phase in (Phase.RESULT, Phase.ERROR):
                 text = f"{total} / {total}"
             painter.drawText(
@@ -504,7 +629,7 @@ class CalibrationWindow(QWidget):
             if self._phase in (Phase.RESULT,):
                 fraction = 1.0
             fill = QRectF(bar.left(), bar.top(), bar.width() * fraction, bar.height())
-            painter.setBrush(BRAND)
+            painter.setBrush(GREEN if self._validating else BRAND)
             painter.drawRoundedRect(fill, 2, 2)
 
         # Face status pill, under the preview.
@@ -529,6 +654,8 @@ class CalibrationWindow(QWidget):
                 if self._phase == Phase.SAMPLE
                 else "Look at the highlighted dot…"
             )
+            if self._validating:
+                hint = "Accuracy check · " + hint
             painter.setPen(MUTED)
             painter.setFont(QFont("Segoe UI", 10))
             painter.drawText(
@@ -576,6 +703,10 @@ class CalibrationWindow(QWidget):
             alpha = 0.35
         else:
             alpha = 1.0
+        active = GREEN if self._validating else BRAND
+        active_rgb = (
+            (52, 211, 153) if self._validating else (56, 189, 248)
+        )
         origin = self.screen.geometry().topLeft()
         for index, (gx, gy) in enumerate(self._points):
             point = QPointF(gx - origin.x(), gy - origin.y())
@@ -584,7 +715,9 @@ class CalibrationWindow(QWidget):
                 Phase.ERROR,
             ):
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor(56, 189, 248, int(45 * alpha)))
+                painter.setBrush(
+                    QColor(active_rgb[0], active_rgb[1], active_rgb[2], int(45 * alpha))
+                )
                 painter.drawEllipse(point, 4, 4)
             elif index == self._point_index and self._phase in (
                 Phase.SETTLE,
@@ -593,8 +726,18 @@ class CalibrationWindow(QWidget):
                 elapsed = time.monotonic() - self._phase_started
                 pulse = 0.5 + 0.5 * math.sin(elapsed * 6.5)
                 halo = QRadialGradient(point, 32)
-                halo.setColorAt(0.0, QColor(56, 189, 248, int(45 + 35 * pulse)))
-                halo.setColorAt(1.0, QColor(56, 189, 248, 0))
+                halo.setColorAt(
+                    0.0,
+                    QColor(
+                        active_rgb[0],
+                        active_rgb[1],
+                        active_rgb[2],
+                        int(45 + 35 * pulse),
+                    ),
+                )
+                halo.setColorAt(
+                    1.0, QColor(active_rgb[0], active_rgb[1], active_rgb[2], 0)
+                )
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(halo)
                 painter.drawEllipse(point, 32, 32)
@@ -606,11 +749,16 @@ class CalibrationWindow(QWidget):
                 )
                 progress = min(1.0, elapsed / max(0.001, duration))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.setPen(QPen(QColor(56, 189, 248, 60), 2))
+                painter.setPen(
+                    QPen(
+                        QColor(active_rgb[0], active_rgb[1], active_rgb[2], 60),
+                        2,
+                    )
+                )
                 painter.drawEllipse(point, 20, 20)
                 painter.setPen(
                     QPen(
-                        BRAND,
+                        active,
                         2.5,
                         Qt.PenStyle.SolidLine,
                         Qt.PenCapStyle.RoundCap,
@@ -626,7 +774,17 @@ class CalibrationWindow(QWidget):
                 painter.drawEllipse(point, 4.5, 4.5)
             else:
                 painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.setPen(QPen(QColor(120, 160, 200, int(70 * alpha)), 1))
+                painter.setPen(
+                    QPen(
+                        QColor(
+                            active_rgb[0],
+                            active_rgb[1],
+                            active_rgb[2],
+                            int(70 * alpha),
+                        ),
+                        1,
+                    )
+                )
                 painter.drawEllipse(point, 4, 4)
 
     def _paint_intro(self, painter: QPainter, width: float, height: float) -> None:
@@ -654,8 +812,9 @@ class CalibrationWindow(QWidget):
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
             | Qt.TextFlag.TextWordWrap,
             "Sit at a comfortable distance from the screen. Your face should be "
-            "well lit and fully visible in the camera preview. The calibration "
-            "starts automatically once your face is detected.",
+            "well lit and fully visible in the camera preview. You will look at "
+            "25 dots, then 9 accuracy-check dots (about 50 seconds). The "
+            "calibration starts automatically once your face is detected.",
         )
         hint_color = BRAND_SOFT if self._face_found else QColor(148, 163, 184)
         painter.setPen(hint_color)
@@ -675,7 +834,8 @@ class CalibrationWindow(QWidget):
 
     def _paint_countdown(self, painter: QPainter, width: float, height: float) -> None:
         remaining = max(
-            0.0, self.COUNTDOWN_SECONDS - (time.monotonic() - self._phase_started)
+            0.0,
+            self._countdown_seconds - (time.monotonic() - self._phase_started),
         )
         number = max(1, int(math.ceil(remaining)))
         center = QPointF(width / 2, height * 0.53)
@@ -696,7 +856,7 @@ class CalibrationWindow(QWidget):
         painter.drawText(
             QRectF(center.x() - 240, center.y() + 100, 480, 30),
             Qt.AlignmentFlag.AlignCenter,
-            "Get comfortable and keep looking at the screen",
+            self._countdown_note,
         )
 
     def _paint_center_message(
@@ -738,7 +898,11 @@ class CalibrationWindow(QWidget):
         painter.drawText(
             QRectF(center.x() - 260, center.y() + 60, 520, 30),
             Qt.AlignmentFlag.AlignCenter,
-            "Building your personal gaze model…",
+            (
+                "Checking accuracy on independent points…"
+                if self._fit_stage == "final"
+                else "Building your personal gaze model…"
+            ),
         )
 
     def _paint_result(self, painter: QPainter, width: float, height: float) -> None:
@@ -772,7 +936,7 @@ class CalibrationWindow(QWidget):
         painter.drawText(
             QRectF(card.left(), card.top() + 86, card.width(), 60),
             Qt.AlignmentFlag.AlignHCenter,
-            f"± {model.metrics.loo_rmse:.0f} px",
+            f"± {model.error_rmse:.0f} px",
         )
         painter.setPen(accent)
         quality_font = QFont("Segoe UI", 12)
@@ -785,11 +949,17 @@ class CalibrationWindow(QWidget):
         )
         painter.setPen(MUTED)
         painter.setFont(QFont("Segoe UI", 9))
+        checked = model.metrics.validation_points > 0
+        where = (
+            f"Checked on {model.metrics.validation_points} independent points"
+            if checked
+            else "Estimated across the whole screen"
+        )
         painter.drawText(
             QRectF(card.left() + 40, card.top() + 182, card.width() - 80, 52),
             Qt.AlignmentFlag.AlignHCenter | Qt.TextFlag.TextWordWrap,
-            "Estimated gaze error across the whole screen "
-            f"({model.metrics.n_points} points, {model.metrics.n_samples} samples). "
+            f"{where} ({model.metrics.n_points} points, "
+            f"{model.metrics.n_samples} samples). "
             + (
                 "You can improve it any time by calibrating again."
                 if good

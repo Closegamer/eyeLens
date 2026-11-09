@@ -32,6 +32,16 @@ class CaptureRequest:
     zoom: float
 
 
+def source_extent(diameter: float, zoom: float) -> float:
+    """Screen area that the lens shows, in logical pixels.
+
+    ``zoom`` is true magnification: 2x means the lens shows an area half its
+    own diameter, scaled up to fill the lens.  Keeping this in one place stops
+    the capture thread and the painter from disagreeing about the geometry.
+    """
+    return max(1.0, float(diameter) / max(0.01, float(zoom)))
+
+
 class ScreenCapture(QThread):
     """Continuously grabs a padded square around the lens centre.
 
@@ -164,8 +174,9 @@ class ScreenCapture(QThread):
         mon_left, mon_top, mon_w, mon_h = monitor
         center_px = request.center_x * scale_x
         center_py = request.center_y * scale_y
-        source_w = max(1.0, request.diameter * request.zoom * scale_x)
-        source_h = max(1.0, request.diameter * request.zoom * scale_y)
+        extent = source_extent(request.diameter, request.zoom)
+        source_w = max(1.0, extent * scale_x)
+        source_h = max(1.0, extent * scale_y)
 
         capture_w = int(round(min(float(mon_w), max(64.0, source_w * self.MARGIN))))
         capture_h = int(round(min(float(mon_h), max(64.0, source_h * self.MARGIN))))

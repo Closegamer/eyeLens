@@ -136,6 +136,11 @@ class EyeLensApp(QObject):
             return None
         model = GazeModel.load(path)
         if model is None:
+            print(
+                "eyeLens: existing calibration is from an older eyeLens version "
+                "or is damaged; recalibration required.",
+                file=sys.stderr,
+            )
             return None
         try:
             calibrated_screen = ScreenInfo.from_dict(model.screen)
@@ -272,7 +277,7 @@ class EyeLensApp(QObject):
                 "ok" if self.model.quality_ok else "warn"
             )
             detail = (
-                f"Estimated error ±{self.model.metrics.loo_rmse:.0f} px · "
+                f"Accuracy ±{self.model.error_rmse:.0f} px · "
                 f"{self.model.metrics.n_points} points · "
                 f"{self.model.metrics.n_samples} samples."
             )
@@ -303,8 +308,8 @@ class EyeLensApp(QObject):
                 info.calibration_detail = tracker.error_text
             else:
                 info.calibration_detail = (
-                    "Look at 25 dots for about 30–40 seconds to teach eyeLens how "
-                    "your eyes map to this screen."
+                    "Look at 25 dots plus 9 accuracy-check dots for about 50 "
+                    "seconds to teach eyeLens how your eyes map to this screen."
                 )
             info.can_calibrate = (
                 tracker is not None
@@ -491,7 +496,7 @@ class EyeLensApp(QObject):
             self.overlay.show()
         self.overlay.raise_()
         self.overlay.flash_osd(
-            f"Calibrated · ±{model.metrics.loo_rmse:.0f} px", duration=2.0
+            f"Calibrated · ±{model.error_rmse:.0f} px", duration=2.0
         )
         self.settings_window.sync_from_settings()
         self.settings_window.refresh_status()
@@ -499,7 +504,7 @@ class EyeLensApp(QObject):
         self._save_settings()
         self._notify(
             "Calibration complete",
-            f"Accuracy: ±{model.metrics.loo_rmse:.0f} px. The lens now follows your eyes.",
+            f"Accuracy: ±{model.error_rmse:.0f} px. The lens now follows your eyes.",
         )
         if self._settings_visible_once:
             self.settings_window.show_window()

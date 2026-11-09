@@ -1,9 +1,14 @@
 """Convert MediaPipe face landmarks into scale-invariant eye/head features.
 
-The feature vector deliberately mixes eye-in-head information (iris position
-inside each eye) with head-pose proxies. A per-user calibration then learns the
-mapping from these features to screen coordinates, which is considerably more
-robust than using raw iris pixels alone.
+The feature vector mixes eye-in-head information (iris position inside each
+eye) with head-pose proxies.  A per-user calibration learns the mapping from
+these features to screen coordinates, which is considerably more robust than
+using raw iris pixels alone.
+
+All eye-local measurements are made in a rotated eye frame.  This matters:
+normalising the iris by the raw eyelid height makes vertical gaze depend on how
+open the eye happens to be, and makes both vertical gaze and blink detection
+change when the head tilts.
 """
 
 from __future__ import annotations
@@ -29,7 +34,9 @@ NOSE_TIP = 1
 FACE_LEFT = 234
 FACE_RIGHT = 454
 
-FEATURE_VERSION = 1
+# Bump when the meaning or order of features changes.  Saved calibrations with
+# an older version are rejected and the user is asked to calibrate again.
+FEATURE_VERSION = 2
 
 FEATURE_NAMES: tuple[str, ...] = (
     "iris_rx",
@@ -45,12 +52,13 @@ FEATURE_NAMES: tuple[str, ...] = (
     "head_roll",
     "face_x",
     "face_y",
-    "face_scale",
+    "face_size",
 )
 
 # Curated second-order terms.  A full quadratic expansion in 14 dimensions
-# would have 119 terms and overfit a 25-point calibration; these interactions
-# capture the effects that matter without exploding the model.
+# would have 119 terms; these interactions capture the effects that matter
+# without exploding the model.  The KRR residual model in gaze/model.py adds
+# the remaining local nonlinearity.
 _SQUARED = (
     "iris_rx",
     "iris_ry",
@@ -62,22 +70,34 @@ _SQUARED = (
     "iris_dy",
     "head_yaw",
     "head_pitch",
+    "head_roll",
     "face_x",
     "face_y",
+    "face_size",
 )
 _CROSS = (
     ("iris_x", "head_yaw"),
     ("iris_x", "head_pitch"),
+    ("iris_x", "head_roll"),
     ("iris_x", "face_x"),
     ("iris_x", "face_y"),
+    ("iris_x", "face_size"),
     ("iris_y", "head_yaw"),
     ("iris_y", "head_pitch"),
+    ("iris_y", "head_roll"),
     ("iris_y", "face_x"),
     ("iris_y", "face_y"),
+    ("iris_y", "face_size"),
     ("iris_x", "iris_y"),
     ("iris_dx", "iris_dy"),
     ("head_yaw", "head_pitch"),
+    ("head_yaw", "head_roll"),
+    ("head_pitch", "head_roll"),
+    ("head_yaw", "face_x"),
+    ("head_pitch", "face_y"),
     ("face_x", "face_y"),
+    ("face_x", "face_size"),
+    ("face_y", "face_size"),
     ("iris_x", "iris_dx"),
     ("iris_y", "iris_dy"),
 )
@@ -111,30 +131,46 @@ def _eye_geometry(
     lower: int,
     iris: int,
 ) -> tuple[float, float, float]:
-    """Return (iris_x, iris_y, openness) in a roll-tolerant eye frame."""
+    """Return (iris_x, iris_y, openness) in a roll-tolerant eye frame.
+
+    ``iris_x`` is the iris position along the corner-to-corner axis (0 at one
+    canthus, 1 at the other).  ``iris_y`` is the perpendicular offset from that
+    axis in units of eye width, positive downwards.  Both are independent of
+    head tilt.  ``openness`` is the perpendicular eyelid gap divided by eye
+    width, so it is also tilt-independent.
+    """
     a = _point(points, corner_a)
     b = _point(points, corner_b)
     if a[0] > b[0]:
         a, b = b, a
+
     axis = b - a
     width = float(np.linalg.norm(axis))
     if width < 1e-3:
         raise ValueError("degenerate eye")
+    u = axis / width
+    # Rotate u by +90 degrees: with y pointing down this is the "down" axis.
+    v = np.array([-u[1], u[0]], dtype=np.float64)
 
     iris_point = _point(points, iris)
-    t = float(np.dot(iris_point - a, axis) / (width * width))
+    iris_offset = iris_point - a
+    iris_x = float(np.dot(iris_offset, u) / width)
+    iris_y = float(np.dot(iris_offset, v) / width)
 
     top = _point(points, upper)
     bottom = _point(points, lower)
-    if top[1] > bottom[1]:
-        top, bottom = bottom, top
-    vertical = float(abs(bottom[1] - top[1]))
-    lid_mid = (top + bottom) * 0.5
-    # (iris - lid_mid) / vertical is positive when looking down (screen y down).
-    iris_y = float((iris_point[1] - lid_mid[1]) / max(vertical, 1e-3))
-    openness = float(np.clip(vertical / width, 0.0, 1.0))
+    top_s = float(np.dot(top - a, v))
+    bottom_s = float(np.dot(bottom - a, v))
+    if top_s > bottom_s:
+        top_s, bottom_s = bottom_s, top_s
+    lid_gap = bottom_s - top_s
+    openness = float(np.clip(lid_gap / width, 0.0, 1.0))
 
-    return float(np.clip(t, -0.35, 1.35)), float(np.clip(iris_y, -1.5, 1.5)), openness
+    return (
+        float(np.clip(iris_x, -0.35, 1.35)),
+        float(np.clip(iris_y, -1.5, 1.5)),
+        openness,
+    )
 
 
 def _clip_feature(value: float, low: float, high: float) -> float:
@@ -191,9 +227,13 @@ def extract_features(
         face_width = float(
             np.linalg.norm(points[FACE_LEFT, :2] - points[FACE_RIGHT, :2])
         )
-        eye_axis = right_center - left_center
+        # Eye axis from image-left to image-right, so a level head is near 0
+        # rather than near pi (and never gets clamped to a constant).
+        eye_axis = left_center - right_center
         roll = float(np.arctan2(eye_axis[1], eye_axis[0]))
-        face_scale = face_width / iod
+        # Apparent face size is a distance proxy.  face_width / iod is almost
+        # constant for a given person and therefore useless for depth.
+        face_size = face_width / max(float(frame_width), 1.0)
 
         values = np.array(
             [
@@ -206,11 +246,11 @@ def extract_features(
                 _clip_feature(l_x - r_x, -1.5, 1.5),
                 _clip_feature(l_y - r_y, -1.5, 1.5),
                 _clip_feature((nose[0] - eye_mid[0]) / iod, -1.5, 1.5),
-                _clip_feature((nose[1] - eye_mid[1]) / iod, -1.5, 1.5),
+                _clip_feature((nose[1] - eye_mid[1]) / iod, -1.5, 2.0),
                 _clip_feature(roll, -0.8, 0.8),
                 _clip_feature((eye_mid[0] - frame_width * 0.5) / iod, -6.0, 6.0),
                 _clip_feature((eye_mid[1] - frame_height * 0.5) / iod, -6.0, 6.0),
-                _clip_feature(face_scale, 0.5, 8.0),
+                _clip_feature(face_size, 0.02, 4.0),
             ],
             dtype=np.float64,
         )

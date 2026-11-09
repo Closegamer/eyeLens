@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from eyelens.gaze.features import (
@@ -89,6 +91,34 @@ def test_head_translation_changes_face_features() -> None:
     shifted = extract_features(make_landmarks(head_dx=0.03), FRAME_W, FRAME_H)
     assert centered is not None and shifted is not None
     assert shifted.values[11] > centered.values[11]
+
+
+def test_eye_features_are_roll_invariant() -> None:
+    """Tilting the head must not change vertical iris position or openness."""
+
+    def rotated(angle: float) -> list[LM]:
+        points = make_landmarks(iris_dy=-0.01)
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        result = []
+        for point in points:
+            dx = point.x - 0.5
+            dy = point.y - 0.5
+            result.append(
+                LM(
+                    0.5 + dx * cos_a - dy * sin_a,
+                    0.5 + dx * sin_a + dy * cos_a,
+                    point.z,
+                )
+            )
+        return result
+
+    level = extract_features(rotated(0.0), FRAME_W, FRAME_H)
+    tilted = extract_features(rotated(0.18), FRAME_W, FRAME_H)
+    assert level is not None and tilted is not None
+    assert abs(level.values[4] - tilted.values[4]) < 0.02
+    assert abs(level.values[5] - tilted.values[5]) < 0.02
+    assert abs(level.openness - tilted.openness) < 0.02
+    assert abs(level.values[10] - tilted.values[10]) > 0.10
 
 
 def test_expanded_feature_length() -> None:

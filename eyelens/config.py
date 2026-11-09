@@ -124,10 +124,10 @@ def _clamp(value: float, low: float, high: float) -> float:
 class Settings:
     """User-facing, persisted preferences."""
 
-    schema: int = 1
+    schema: int = 2
     diameter: int = 280
     zoom: float = 2.0
-    smoothing: float = 0.55
+    smoothing: float = 0.72
     opacity: float = 0.98
     show_ring: bool = True
     show_osd: bool = True
@@ -154,9 +154,16 @@ class Settings:
             settings = cls(**values)
         except TypeError:
             return cls()
+        # v2 changed the default follow behaviour from "responsive" to
+        # "calm".  Migrate old settings once; afterwards the slider value is
+        # whatever the user chose.
+        if int(raw.get("schema", 1)) < 2:
+            settings.smoothing = cls().smoothing
+            settings.schema = 2
         return settings.normalized()
 
     def normalized(self) -> Settings:
+        self.schema = 2
         self.diameter = int(
             _clamp(float(self.diameter), *self.DIAMETER_RANGE)
         )

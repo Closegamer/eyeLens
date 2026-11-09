@@ -245,7 +245,7 @@ class SettingsWindow(QWidget):
         titles.addWidget(title)
         titles.addWidget(subtitle)
         header.addLayout(titles, 1)
-        version = QLabel("v0.1")
+        version = QLabel("v0.2")
         version.setObjectName("badge")
         header.addWidget(version, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(header)
@@ -321,7 +321,7 @@ class SettingsWindow(QWidget):
             0,
             100,
             1,
-            "Higher smoothing reduces jitter but adds a little lag.",
+            "Higher = calmer, slower lens movement; lower = faster but more jitter.",
         )
         self.opacity_slider, self.opacity_value = self._slider_row(
             lens_layout,
@@ -362,8 +362,9 @@ class SettingsWindow(QWidget):
         calibration_title.setObjectName("section")
         calibration_layout.addWidget(calibration_title)
         self.calibration_help = QLabel(
-            "Look at 25 dots for about 30–40 seconds. eyeLens learns how your "
-            "eyes map to this screen. Your camera feed never leaves this computer."
+            "Look at 25 dots, then 9 accuracy-check dots (about 50 seconds). "
+            "eyeLens learns how your eyes map to this screen and reports the "
+            "error it measured. Your camera feed never leaves this computer."
         )
         self.calibration_help.setObjectName("muted")
         self.calibration_help.setWordWrap(True)
@@ -736,12 +737,14 @@ class SettingsWindow(QWidget):
         self.size_value.setText(f"{self.settings.diameter} px")
         self.zoom_value.setText(f"{self.settings.zoom:.2f}×")
         smoothing = self.settings.smoothing
-        if smoothing < 0.28:
-            smoothing_text = "Responsive"
-        elif smoothing < 0.68:
+        if smoothing < 0.25:
+            smoothing_text = "Fast"
+        elif smoothing < 0.55:
             smoothing_text = "Balanced"
-        else:
+        elif smoothing < 0.80:
             smoothing_text = "Smooth"
+        else:
+            smoothing_text = "Very smooth"
         self.smoothing_value.setText(smoothing_text)
         self.opacity_value.setText(f"{int(round(self.settings.opacity * 100))}%")
         self.zoom_slider.setToolTip(

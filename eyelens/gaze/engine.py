@@ -15,10 +15,15 @@ from .tracker import EyeTracker
 
 
 def smoothing_to_cutoff(smoothing: float) -> tuple[float, float]:
-    """Map the UI slider (0 = responsive, 1 = very smooth) to filter params."""
+    """Map the UI slider (0 = responsive, 1 = very smooth) to filter params.
+
+    The defaults are deliberately on the calm side: a magnifying lens feels
+    wrong when it snaps to every eye-tracker jitter, and gaze estimation is
+    noisy by nature.
+    """
     s = max(0.0, min(1.0, float(smoothing)))
-    min_cutoff = math.exp(math.log(4.0) * (1.0 - s) + math.log(0.42) * s)
-    beta = 0.045 * (1.0 - s) + 0.008 * s
+    min_cutoff = math.exp(math.log(2.4) * (1.0 - s) + math.log(0.22) * s)
+    beta = 0.030 * (1.0 - s) + 0.004 * s
     return min_cutoff, beta
 
 

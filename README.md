@@ -19,7 +19,9 @@ to read, then unfreeze it and continue working.
 ## Features
 
 - **Webcam eye tracking** — no special hardware, no IR tracker, no cloud.
-- **Guided 25-point calibration** — about 30–40 seconds, saveable and reusable.
+- **Guided 25-point calibration + 9-point accuracy check** — about 50 seconds,
+  saveable and reusable. The result screen shows the error measured on the
+  independent check points.
 - **Variable lens** — 120–600 px diameter, 1×–6× magnification, adjustable opacity.
 - **Smooth and stable** — adaptive 1€ filtering, blink rejection, and a short
   hold when tracking is temporarily lost.
@@ -72,9 +74,11 @@ In demo mode the lens follows the mouse pointer instead of your eyes.
 2. Click **Calibrate now**. Keep your face fully visible and avoid backlighting.
 3. Look at each of the 25 dots **with your eyes only** while keeping your head
    still. The dot turns into a progress ring while samples are collected.
-4. When the result appears, press **Enter** to keep the calibration or **R** to
-   try again. The estimated error is shown in pixels.
-5. The lens appears and starts following your gaze.
+4. After the 25th dot, eyeLens repeats a short 9-dot **accuracy check** on
+   points it did not train on. This measures the real error instead of guessing.
+5. When the result appears, press **Enter** to keep the calibration or **R** to
+   try again. The checked error is shown in pixels.
+6. The lens appears and starts following your gaze.
 
 Calibration is personal and tied to the current screen geometry. Recalibrate if
 you move the camera, change the display resolution or scaling, or notice the
@@ -95,8 +99,9 @@ lens drifting.
 Everything is also available from the tray icon and the settings window:
 
 - **Size** — lens diameter in logical pixels.
-- **Zoom** — magnification of the area under the lens.
-- **Smoothing** — trade responsiveness for stability.
+- **Zoom** — true magnification of the area under the lens (2× shows an area
+  half the lens diameter, scaled up).
+- **Smoothing** — higher is calmer and slower; lower is faster but jitterier.
 - **Opacity** — how strongly the lens covers the content underneath.
 - **Outline / On-screen HUD** — visual chrome and the small zoom/size badge.
 - **Freeze** — keeps the lens where it is while your eyes move.
@@ -107,12 +112,12 @@ Everything is also available from the tray icon and the settings window:
 
 ```
 webcam ──► MediaPipe Face Landmarker (478 landmarks, both irises)
-       ──► 14 scale-invariant features
+       ──► 14 scale-invariant features in a roll-corrected eye frame
             iris position in each eye, vergence, head yaw/pitch/roll,
-            face position and size
-       ──► per-user ridge regression (40 polynomial terms)
+            face position and apparent size
+       ──► per-user hybrid model (52 polynomial terms + kernel-ridge residual)
             trained on 25 screen targets with grouped leave-one-point-out
-            validation to choose regularisation
+            cross-validation; a separate 9-point check measures real error
        ──► 1€ filter + blink/loss handling
        ──► lens position (screen logical pixels)
        ──► padded 30 fps screen capture around the lens
@@ -122,11 +127,18 @@ webcam ──► MediaPipe Face Landmarker (478 landmarks, both irises)
 A few implementation details that matter:
 
 - Head-pose proxies are included alongside iris position, so small head shifts
-  do not immediately break the mapping.
+  do not immediately break the mapping. Eye measurements are made in a rotated
+  eye frame, so a tilted head does not fake vertical gaze or a blink.
 - Calibration keeps every stable frame from each target (usually several hundred
   samples) and discards blink/outlier frames per target before fitting.
-- Runtime predictions are clipped to the calibrated feature range, preventing a
-  bad frame from throwing the lens across the screen.
+- The polynomial stage captures the global gaze trend; a kernel-ridge residual
+  stage captures the local nonlinearity the polynomial misses. The kernel stage
+  is only enabled when grouped cross-validation says it helps.
+- The 9 accuracy-check points are never used to fit the primary model, so the
+  error shown on the result screen is a real held-out measurement.
+- Runtime predictions are clipped to the calibrated feature range, and the
+  kernel residual is bounded, preventing a bad frame from throwing the lens
+  across the screen.
 - `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` hides the overlay from
   `mss`; otherwise a magnifier would show an infinite mirror of itself.
 - Screen capture grabs only a padded square around the lens, not the whole
@@ -156,8 +168,8 @@ move closer to the camera, and make sure the correct camera is selected.
 
 **The lens drifts or jumps.**
 Recalibrate. Keep your head still during calibration and look at the centre of
-each dot. Increase **Smoothing** if the lens jitters; decrease it if it feels
-sluggish.
+each dot. Increase **Smoothing** if the lens jitters or moves too quickly;
+decrease it if it feels sluggish.
 
 **The lens shows a mirror image of itself.**
 This should not happen on Windows 10 2004+ / Windows 11. If you see a warning in
@@ -213,7 +225,7 @@ eyelens/
 ├── hotkeys.py                global hotkeys (pynput)
 ├── gaze/
 │   ├── features.py           MediaPipe landmarks -> 14 features
-│   ├── model.py              calibration + ridge regression
+│   ├── model.py              calibration: ridge + kernel-ridge residual
 │   ├── filters.py            1€ filter
 │   ├── tracker.py            camera + MediaPipe thread
 │   └── engine.py             prediction + smoothing + demo mode
@@ -233,7 +245,8 @@ Run the tests:
 
 The unit tests cover feature extraction, calibration maths, filtering, and
 settings. A live end-to-end calibration needs a webcam and a person looking at
-the screen, so it is intentionally not automated.
+the screen, so it is intentionally not automated; the two-stage calibration
+state machine is exercised with a fake tracker during development.
 
 ## Limitations / roadmap
 
