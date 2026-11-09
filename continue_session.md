@@ -47,5 +47,7 @@ rejected; a fresh stable+motion recalibration is required.
   calibration load is rejected.
 - `Modelfile` in the repo root is still an unrelated pre-existing file; leave it
   untracked.
-- This memory file and the v0.8 handoff are committed in the session commit
-  after `302e6b2`.
+- This `continue_session.md` and the formal v0.8 handoff are committed together
+  in the session handoff commit. The next session should read
+  `continue_session.md` first, then the handoff, and start with the stable+motion
+  recalibration.
