@@ -24,7 +24,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from ..capture import ScreenCapture, source_extent
-from ..config import ScreenInfo, Settings
+from ..config import ScreenInfo, Settings, lens_dimensions
 from ..gaze.engine import GazeEngine
 from .correction_handle import CorrectionHandle
 
@@ -67,7 +67,11 @@ class LensOverlay(QWidget):
         self._display_center = QPointF(
             screen.geometry().width() / 2.0, screen.geometry().height() / 2.0
         )
-        self._display_diameter = float(self._settings.diameter)
+        width, height = lens_dimensions(
+            self._settings.shape, self._settings.diameter
+        )
+        self._display_width = float(width)
+        self._display_height = float(height)
         self._has_gaze = False
         self._last_bounds = QRectF()
         self._last_paint_state: tuple | None = None
@@ -109,10 +113,17 @@ class LensOverlay(QWidget):
         if (
             abs(old.zoom - self._settings.zoom) > 1e-6
             or old.diameter != self._settings.diameter
+            or old.shape != self._settings.shape
         ):
-            self.flash_osd(
-                f"{self._settings.zoom:.2f}×  ·  {self._settings.diameter} px"
+            width, height = lens_dimensions(
+                self._settings.shape, self._settings.diameter
             )
+            size = (
+                f"{width}×{height} px"
+                if self._settings.shape == "wide"
+                else f"{height} px"
+            )
+            self.flash_osd(f"{self._settings.zoom:.2f}×  ·  {size}")
         self._update_paint()
 
     def set_capture(self, capture: ScreenCapture) -> None:
@@ -198,19 +209,22 @@ class LensOverlay(QWidget):
             origin.y() + self._display_center.y(),
         )
 
-    def _clamp_center(self, center: QPointF, diameter: float) -> QPointF:
-        radius = diameter / 2.0
-        width = float(self.screen.geometry().width())
-        height = float(self.screen.geometry().height())
+    def _clamp_center(
+        self, center: QPointF, lens_width: float, lens_height: float
+    ) -> QPointF:
+        half_w = lens_width / 2.0
+        half_h = lens_height / 2.0
+        screen_w = float(self.screen.geometry().width())
+        screen_h = float(self.screen.geometry().height())
         x = (
-            width / 2.0
-            if diameter >= width
-            else min(max(center.x(), radius), width - radius)
+            screen_w / 2.0
+            if lens_width >= screen_w
+            else min(max(center.x(), half_w), screen_w - half_w)
         )
         y = (
-            height / 2.0
-            if diameter >= height
-            else min(max(center.y(), radius), height - radius)
+            screen_h / 2.0
+            if lens_height >= screen_h
+            else min(max(center.y(), half_h), screen_h - half_h)
         )
         return QPointF(x, y)
 
@@ -223,7 +237,7 @@ class LensOverlay(QWidget):
             global_center.y() - origin.y(),
         )
         self._display_center = self._clamp_center(
-            local, self._display_diameter
+            local, self._display_width, self._display_height
         )
         self._has_gaze = True
         self._last_paint_state = None
@@ -382,14 +396,20 @@ class LensOverlay(QWidget):
         if valid:
             self._has_gaze = True
 
-        # Ease the diameter, then keep the lens fully on screen.
-        d_target = float(settings.diameter)
-        self._display_diameter += (d_target - self._display_diameter) * (
+        # Ease the lens size, then keep the lens fully on screen.
+        target_w, target_h = lens_dimensions(
+            settings.shape, settings.diameter
+        )
+        self._display_width += (float(target_w) - self._display_width) * (
             1.0 - math.exp(-dt / 0.09)
         )
-        diameter = max(20.0, self._display_diameter)
+        self._display_height += (float(target_h) - self._display_height) * (
+            1.0 - math.exp(-dt / 0.09)
+        )
+        width = max(20.0, self._display_width)
+        height = max(20.0, self._display_height)
         self._display_center = self._clamp_center(
-            self._display_center, diameter
+            self._display_center, width, height
         )
         if self._correcting and self._handle is not None:
             self._handle.set_center(self._global_center())
@@ -408,7 +428,8 @@ class LensOverlay(QWidget):
             self.capture.set_request(
                 self._display_center.x(),
                 self._display_center.y(),
-                diameter,
+                width,
+                height,
                 settings.zoom,
             )
             self.capture.set_active(True)
@@ -417,14 +438,24 @@ class LensOverlay(QWidget):
 
         self._update_paint()
 
-    def _lens_rect(self, center: QPointF, diameter: float) -> QRectF:
-        radius = diameter / 2.0
+    def _lens_rect(
+        self, center: QPointF, width: float, height: float
+    ) -> QRectF:
         return QRectF(
-            center.x() - radius - self.SHADOW,
-            center.y() - radius - self.SHADOW,
-            diameter + self.SHADOW * 2,
-            diameter + self.SHADOW * 2,
+            center.x() - width / 2.0 - self.SHADOW,
+            center.y() - height / 2.0 - self.SHADOW,
+            width + self.SHADOW * 2,
+            height + self.SHADOW * 2,
         )
+
+    def _lens_path(self, rect: QRectF) -> QPainterPath:
+        path = QPainterPath()
+        if self._settings.shape == "round":
+            path.addEllipse(rect)
+        else:
+            corner = min(14.0, min(rect.width(), rect.height()) * 0.06)
+            path.addRoundedRect(rect, corner, corner)
+        return path
 
     def _update_paint(self) -> None:
         now = time.monotonic()
@@ -433,7 +464,9 @@ class LensOverlay(QWidget):
         state = (
             round(self._display_center.x(), 2),
             round(self._display_center.y(), 2),
-            round(self._display_diameter, 2),
+            round(self._display_width, 2),
+            round(self._display_height, 2),
+            self._settings.shape,
             round(self._visibility, 3),
             self._locked,
             round(self._osd_until - now, 2) if osd_visible else 0.0,
@@ -445,7 +478,9 @@ class LensOverlay(QWidget):
         if state == self._last_paint_state:
             return
         self._last_paint_state = state
-        new_bounds = self._lens_rect(self._display_center, self._display_diameter)
+        new_bounds = self._lens_rect(
+            self._display_center, self._display_width, self._display_height
+        )
         dirty = new_bounds.united(self._last_bounds).toAlignedRect()
         self._last_bounds = new_bounds
         if dirty.isValid():
@@ -468,49 +503,46 @@ class LensOverlay(QWidget):
             return
 
         center = self._display_center
-        diameter = max(20.0, self._display_diameter)
-        radius = diameter / 2.0
+        width = max(20.0, self._display_width)
+        height = max(20.0, self._display_height)
+        rect = QRectF(
+            center.x() - width / 2.0,
+            center.y() - height / 2.0,
+            width,
+            height,
+        )
         settings = self._settings
         alpha = visibility * settings.opacity
         painter.setOpacity(alpha)
 
-        # Soft drop shadow.
-        shadow = QRadialGradient(
-            center, radius + self.SHADOW, QPointF(center.x(), center.y() - radius * 0.2)
-        )
-        shadow.setColorAt(0.0, QColor(0, 0, 0, 0))
-        shadow.setColorAt(0.83, QColor(0, 0, 0, 0))
-        shadow.setColorAt(0.93, QColor(0, 0, 0, 70))
-        shadow.setColorAt(1.0, QColor(0, 0, 0, 0))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(shadow)
-        painter.drawEllipse(center, radius + self.SHADOW, radius + self.SHADOW)
+        lens_path = self._lens_path(rect)
+        self._draw_shadow(painter, lens_path)
 
-        lens_path = QPainterPath()
-        lens_path.addEllipse(center, radius, radius)
         painter.save()
         painter.setClipPath(lens_path)
 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(5, 11, 19, 245))
-        painter.drawEllipse(center, radius, radius)
+        painter.drawPath(lens_path)
 
         frame = self.capture.latest()
         if frame is not None:
-            self._draw_captured(painter, frame, center, diameter, settings.zoom)
+            self._draw_captured(painter, frame, rect, settings.zoom)
         else:
-            self._draw_loading(painter, center, radius)
+            self._draw_loading(painter, rect)
 
         # Subtle vignette so the magnified image melts into the rim.
-        vignette = QRadialGradient(center, radius)
+        vignette = QRadialGradient(
+            rect.center(), max(width, height) * 0.55
+        )
         vignette.setColorAt(0.0, QColor(0, 0, 0, 0))
         vignette.setColorAt(0.78, QColor(0, 0, 0, 0))
         vignette.setColorAt(1.0, QColor(0, 0, 0, 120))
         painter.setBrush(vignette)
-        painter.drawEllipse(center, radius, radius)
+        painter.drawPath(lens_path)
 
         if settings.show_osd:
-            self._draw_osd(painter, center, radius)
+            self._draw_osd(painter, rect)
         painter.restore()
 
         if settings.show_ring:
@@ -521,25 +553,38 @@ class LensOverlay(QWidget):
             )
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(QColor(0, 0, 0, 90), 3.2))
-            painter.drawEllipse(center, radius + 0.6, radius + 0.6)
+            painter.drawPath(lens_path)
             painter.setPen(QPen(ring_color, 1.7))
-            painter.drawEllipse(center, radius + 0.2, radius + 0.2)
+            painter.drawPath(lens_path)
 
         painter.end()
+
+    def _draw_shadow(self, painter: QPainter, path: QPainterPath) -> None:
+        """A soft shadow that works for circles and rectangles alike."""
+        painter.save()
+        painter.translate(0, 3.0)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for step in range(7, 0, -1):
+            spread = self.SHADOW * 1.8 * step / 7.0
+            alpha = int(5 + 6 * (7 - step))
+            pen = QPen(QColor(0, 0, 0, alpha), spread)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.drawPath(path)
+        painter.restore()
 
     def _draw_captured(
         self,
         painter: QPainter,
         frame,
-        center: QPointF,
-        diameter: float,
+        rect: QRectF,
         zoom: float,
     ) -> None:
         image = frame.image
         if image is None or image.isNull():
             return
-        source_w = source_extent(diameter, zoom) * frame.scale_x
-        source_h = source_extent(diameter, zoom) * frame.scale_y
+        source_w = source_extent(rect.width(), zoom) * frame.scale_x
+        source_h = source_extent(rect.height(), zoom) * frame.scale_y
         src = QRectF(
             frame.center_x - source_w / 2.0,
             frame.center_y - source_h / 2.0,
@@ -550,10 +595,6 @@ class LensOverlay(QWidget):
         inter = src.intersected(image_rect)
         if inter.width() <= 0 or inter.height() <= 0:
             return
-        radius = diameter / 2.0
-        target = QRectF(
-            center.x() - radius, center.y() - radius, diameter, diameter
-        )
         # Map the cropped part of the source image exactly onto its place in
         # the lens; areas beyond the edge of the screen stay dark.
         nx = (inter.left() - src.left()) / src.width()
@@ -561,27 +602,29 @@ class LensOverlay(QWidget):
         nw = inter.width() / src.width()
         nh = inter.height() / src.height()
         dst = QRectF(
-            target.left() + nx * target.width(),
-            target.top() + ny * target.height(),
-            nw * target.width(),
-            nh * target.height(),
+            rect.left() + nx * rect.width(),
+            rect.top() + ny * rect.height(),
+            nw * rect.width(),
+            nh * rect.height(),
         )
         painter.drawImage(dst, image, inter)
 
-    def _draw_loading(self, painter: QPainter, center: QPointF, radius: float) -> None:
+    def _draw_loading(self, painter: QPainter, rect: QRectF) -> None:
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        pen = QPen(QColor(56, 189, 248, 120), max(1.5, radius * 0.018))
+        radius = min(rect.width(), rect.height()) * 0.28
+        center = rect.center()
+        pen = QPen(QColor(56, 189, 248, 120), max(1.5, radius * 0.06))
         painter.setPen(pen)
-        rect = QRectF(
-            center.x() - radius * 0.55,
-            center.y() - radius * 0.55,
-            radius * 1.1,
-            radius * 1.1,
+        arc_rect = QRectF(
+            center.x() - radius,
+            center.y() - radius,
+            radius * 2.0,
+            radius * 2.0,
         )
         start = int((time.monotonic() * 220) % 360 * 16)
-        painter.drawArc(rect, start, 100 * 16)
+        painter.drawArc(arc_rect, start, 100 * 16)
 
-    def _draw_osd(self, painter: QPainter, center: QPointF, radius: float) -> None:
+    def _draw_osd(self, painter: QPainter, rect: QRectF) -> None:
         now = time.monotonic()
         if now >= self._osd_until or not self._osd_text:
             return
@@ -593,18 +636,20 @@ class LensOverlay(QWidget):
             fade = min(fade, max(0.0, (now - self._osd_started) / 0.10))
         if fade <= 0.0:
             return
-        font_size = int(max(10.0, min(16.0, radius * 0.085)))
+        height = rect.height()
+        font_size = int(max(10.0, min(16.0, height * 0.085)))
         font = QFont("Segoe UI", font_size)
         font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
         metrics = painter.fontMetrics()
         text = self._osd_text
         text_width = metrics.horizontalAdvance(text)
-        pad_x = max(8.0, radius * 0.09)
-        pad_y = max(4.0, radius * 0.045)
+        pad_x = max(8.0, height * 0.09)
+        pad_y = max(4.0, height * 0.045)
+        bottom_margin = max(8.0, height * 0.07)
         box = QRectF(
-            center.x() - text_width / 2 - pad_x,
-            center.y() + radius * 0.48 - metrics.height() / 2 - pad_y,
+            rect.center().x() - text_width / 2 - pad_x,
+            rect.bottom() - bottom_margin - metrics.height() - pad_y * 2,
             text_width + pad_x * 2,
             metrics.height() + pad_y * 2,
         )

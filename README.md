@@ -4,7 +4,8 @@
 
 eyeLens uses an ordinary webcam to estimate where you are looking on screen, then
 draws a circular, always-on-top magnifier over that spot. The lens can be any
-size from 120 to 600 px and zoom from 1× to 6×. A short guided calibration
+size from 120 to 1200 px high (wide lenses are 1.6× wider) and zoom from 1×
+to 6×. A short guided calibration
 teaches it how *your* eyes map to *your* screen.
 
 ![eyeLens settings](docs/settings.png)
@@ -22,7 +23,10 @@ to read, then unfreeze it and continue working.
 - **Guided 25-point calibration + 9-point accuracy check** — about 50 seconds,
   saveable and reusable. The result screen shows the error measured on the
   independent check points.
-- **Variable lens** — 120–600 px diameter, 1×–6× magnification, adjustable opacity.
+- **Variable lens** — 120–1200 px high, round / square / wide (1.6× wider),
+  1×–6× magnification, adjustable opacity.
+- **Big lens on demand** — press `Ctrl+Alt+B` for a screen-sized lens; press
+  again to return to your previous size.
 - **Smooth and stable** — adaptive 1€ filtering, blink rejection, and a short
   hold when tracking is temporarily lost.
 - **Freeze mode** — lock the lens in place for comfortable reading.
@@ -102,14 +106,19 @@ calibration.
 | `Ctrl + Alt + F` | Freeze / unfreeze the lens position |
 | `Ctrl + Alt + C` | Start calibration |
 | `Ctrl + Alt + D` | Correct / drag the lens position |
+| `Ctrl + Alt + B` | Big lens on / off |
 | `Ctrl + Alt + =` / `Ctrl + Alt + -` | Zoom in / out |
 | `Ctrl + Alt + ]` / `Ctrl + Alt + [` | Grow / shrink the lens |
 
 Everything is also available from the tray icon and the settings window:
 
-- **Size** — lens diameter in logical pixels.
+- **Shape** — round, square, or wide. The size slider sets the height; a wide
+  lens is 1.6× wider.
+- **Size** — lens height in logical pixels, up to 1200.
+- **Big lens** — toggle a large screen-sized lens without moving the slider
+  (`Ctrl+Alt+B`).
 - **Zoom** — true magnification of the area under the lens (2× shows an area
-  half the lens diameter, scaled up).
+  half the lens dimensions, scaled up).
 - **Smoothing** — higher is calmer and slower; lower is faster but jitterier.
 - **Opacity** — how strongly the lens covers the content underneath.
 - **Outline / On-screen HUD** — visual chrome and the small zoom/size badge.

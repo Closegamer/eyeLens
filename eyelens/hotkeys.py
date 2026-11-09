@@ -14,6 +14,7 @@ class HotkeyManager(QObject):
     toggle_freeze = Signal()
     calibrate = Signal()
     correct_lens = Signal()
+    toggle_big = Signal()
     zoom_in = Signal()
     zoom_out = Signal()
     size_up = Signal()
@@ -25,6 +26,7 @@ class HotkeyManager(QObject):
         "<ctrl>+<alt>+f": "toggle_freeze",
         "<ctrl>+<alt>+c": "calibrate",
         "<ctrl>+<alt>+d": "correct_lens",
+        "<ctrl>+<alt>+b": "toggle_big",
         "<ctrl>+<alt>+=": "zoom_in",
         "<ctrl>+<alt>+-": "zoom_out",
         "<ctrl>+<alt>+]": "size_up",

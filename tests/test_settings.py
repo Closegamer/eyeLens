@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from eyelens.config import ScreenInfo, Settings
+from eyelens.config import (
+    ScreenInfo,
+    Settings,
+    lens_dimensions,
+    preferred_big_diameter,
+)
 
 
 def test_settings_normalization() -> None:
@@ -22,6 +27,22 @@ def test_settings_roundtrip(tmp_path) -> None:
     assert loaded.zoom == 2.75
     assert loaded.smoothing == 0.2
     assert loaded.opacity == 0.8
+
+
+def test_preferred_big_diameter_fits_screen() -> None:
+    assert preferred_big_diameter(1200) == 1020
+    assert preferred_big_diameter(1080) == 918
+    assert preferred_big_diameter(400) == 340
+    assert preferred_big_diameter(2000) == Settings.DIAMETER_RANGE[1]
+
+
+def test_lens_shapes_and_dimensions() -> None:
+    assert lens_dimensions("round", 280) == (280, 280)
+    assert lens_dimensions("square", 280) == (280, 280)
+    assert lens_dimensions("wide", 280) == (448, 280)
+    assert lens_dimensions("wide", 1200) == (1920, 1200)
+    assert Settings(shape="wide").normalized().shape == "wide"
+    assert Settings(shape="banana").normalized().shape == "round"
 
 
 def test_invalid_settings_file_uses_defaults(tmp_path) -> None:

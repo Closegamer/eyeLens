@@ -28,6 +28,8 @@ from .config import (
     calibration_path,
     ensure_model_path,
     find_model_path,
+    lens_dimensions,
+    preferred_big_diameter,
 )
 from .gaze.engine import GazeEngine
 from .gaze.model import GazeModel
@@ -62,6 +64,7 @@ class EyeLensApp(QObject):
         self._correction_target: tuple[float, float] | None = None
         self._correction_release_at = 0.0
         self._correction_pending = False
+        self._big_previous_diameter: int | None = None
 
         self.settings = Settings.load()
         self.screen = QGuiApplication.primaryScreen()
@@ -98,6 +101,7 @@ class EyeLensApp(QObject):
         self.settings_window.freeze_requested.connect(self.toggle_freeze)
         self.settings_window.camera_restart_requested.connect(self._restart_camera)
         self.settings_window.correct_requested.connect(self.correct_lens)
+        self.settings_window.big_lens_requested.connect(self.toggle_big_lens)
         self.settings_window.quit_requested.connect(self.quit)
         self.settings_window.hidden_to_tray.connect(self._on_hidden_to_tray)
 
@@ -120,6 +124,7 @@ class EyeLensApp(QObject):
         self._hotkeys.toggle_freeze.connect(self.toggle_freeze)
         self._hotkeys.calibrate.connect(self.start_calibration)
         self._hotkeys.correct_lens.connect(self.correct_lens)
+        self._hotkeys.toggle_big.connect(self.toggle_big_lens)
         self._hotkeys.zoom_in.connect(lambda: self.adjust_zoom(0.25))
         self._hotkeys.zoom_out.connect(lambda: self.adjust_zoom(-0.25))
         self._hotkeys.size_up.connect(lambda: self.adjust_size(20))
@@ -206,6 +211,11 @@ class EyeLensApp(QObject):
         self._tray_correct = QAction("Correct lens position…", menu)
         self._tray_correct.triggered.connect(self.correct_lens)
         menu.addAction(self._tray_correct)
+
+        self._tray_big = QAction("Big lens", menu)
+        self._tray_big.setCheckable(True)
+        self._tray_big.triggered.connect(self.toggle_big_lens)
+        menu.addAction(self._tray_big)
         menu.addSeparator()
 
         self._tray_zoom_in = QAction("Zoom in", menu)
@@ -256,6 +266,7 @@ class EyeLensApp(QObject):
             )
             info.can_calibrate = False
             info.can_correct = False
+            info.can_big = True
             return info
 
         tracker = self.tracker
@@ -319,6 +330,7 @@ class EyeLensApp(QObject):
                 and not tracker.error_text
             )
             info.can_correct = info.can_calibrate
+            info.can_big = True
         else:
             info.calibration_text = "Not calibrated"
             info.calibration_level = "bad"
@@ -341,6 +353,7 @@ class EyeLensApp(QObject):
                 and not tracker.error_text
             )
             info.can_correct = False
+            info.can_big = False
         return info
 
     def _sync_tray_menu(self) -> None:
@@ -352,8 +365,10 @@ class EyeLensApp(QObject):
         )
         self._tray_show_lens.setChecked(self.settings.lens_visible)
         self._tray_freeze.setChecked(self.overlay.locked)
+        self._tray_big.setChecked(self._big_previous_diameter is not None)
         available = self.demo or self.model is not None
         self._tray_correct.setEnabled(info.can_correct)
+        self._tray_big.setEnabled(available)
         self._tray_zoom_in.setEnabled(available)
         self._tray_zoom_out.setEnabled(available)
         self._tray_size_up.setEnabled(available)
@@ -361,10 +376,17 @@ class EyeLensApp(QObject):
         self._tray_calibrate.setEnabled(info.can_calibrate)
         self.tray.setToolTip(f"eyeLens — {info.calibration_text}")
         self.settings_window.set_locked(self.overlay.locked)
+        self.settings_window.set_big_lens(self._big_previous_diameter is not None)
 
     # -------------------------------------------------------------- settings
     def _on_settings_changed(self) -> None:
         self.settings.normalized()
+        if (
+            self._big_previous_diameter is not None
+            and abs(self.settings.diameter - self._big_diameter()) > 1
+        ):
+            self._big_previous_diameter = None
+            self.settings_window.set_big_lens(False)
         if not self.settings.lens_visible and self.overlay.correction_active:
             self.overlay.cancel_correction()
         self.engine.apply_settings(self.settings)
@@ -419,6 +441,57 @@ class EyeLensApp(QObject):
         self.overlay.toggle_locked()
         self.settings_window.set_locked(self.overlay.locked)
         self._sync_tray_menu()
+
+    def _big_diameter(self) -> int:
+        return preferred_big_diameter(self.screen_data.height)
+
+    def toggle_big_lens(self) -> None:
+        if not self.demo and self.model is None:
+            self.settings_window.set_big_lens(False)
+            self._sync_tray_menu()
+            self._notify(
+                "Calibrate first", "The size control needs a calibrated lens."
+            )
+            return
+        if self._big_previous_diameter is None:
+            target = self._big_diameter()
+            if self.settings.diameter >= target:
+                self.settings_window.set_big_lens(False)
+                self._sync_tray_menu()
+                width, height = lens_dimensions(
+                    self.settings.shape, self.settings.diameter
+                )
+                size = (
+                    f"{width}×{height} px"
+                    if self.settings.shape == "wide"
+                    else f"{height} px"
+                )
+                self.overlay.flash_osd(f"Lens already {size}", duration=1.8)
+                return
+            self._big_previous_diameter = int(self.settings.diameter)
+            self.settings.diameter = target
+            prefix = "Big lens"
+        else:
+            self.settings.diameter = int(self._big_previous_diameter)
+            self._big_previous_diameter = None
+            prefix = "Lens"
+        self.settings.normalized()
+        width, height = lens_dimensions(
+            self.settings.shape, self.settings.diameter
+        )
+        size = (
+            f"{width}×{height} px"
+            if self.settings.shape == "wide"
+            else f"{height} px"
+        )
+        message = f"{prefix} · {size}"
+        self.engine.apply_settings(self.settings)
+        self.overlay.apply_settings(self.settings)
+        self.settings_window.sync_from_settings()
+        self.settings_window.set_big_lens(self._big_previous_diameter is not None)
+        self._save_timer.start()
+        self._sync_tray_menu()
+        self.overlay.flash_osd(message, duration=1.8)
 
     # --------------------------------------------------- mouse correction
     def correct_lens(self) -> None:
@@ -555,6 +628,9 @@ class EyeLensApp(QObject):
         self.settings.diameter = int(
             max(low, min(high, self.settings.diameter + delta))
         )
+        if self._big_previous_diameter is not None:
+            self._big_previous_diameter = None
+            self.settings_window.set_big_lens(False)
         self.engine.apply_settings(self.settings)
         self.overlay.apply_settings(self.settings)
         self.settings_window.sync_from_settings()

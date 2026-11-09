@@ -28,7 +28,8 @@ class CaptureFrame:
 class CaptureRequest:
     center_x: float
     center_y: float
-    diameter: float
+    width: float
+    height: float
     zoom: float
 
 
@@ -61,7 +62,7 @@ class ScreenCapture(QThread):
         self.screen = screen
         self._lock = threading.Lock()
         self._request = CaptureRequest(
-            screen.width / 2.0, screen.height / 2.0, 280.0, 2.0
+            screen.width / 2.0, screen.height / 2.0, 280.0, 280.0, 2.0
         )
         self._active = True
         self._stop_event = threading.Event()
@@ -71,11 +72,20 @@ class ScreenCapture(QThread):
 
     # -------------------------------------------------------------- interface
     def set_request(
-        self, center_x: float, center_y: float, diameter: float, zoom: float
+        self,
+        center_x: float,
+        center_y: float,
+        width: float,
+        height: float,
+        zoom: float,
     ) -> None:
         with self._lock:
             self._request = CaptureRequest(
-                float(center_x), float(center_y), float(diameter), float(zoom)
+                float(center_x),
+                float(center_y),
+                float(width),
+                float(height),
+                float(zoom),
             )
 
     def set_active(self, active: bool) -> None:
@@ -174,9 +184,10 @@ class ScreenCapture(QThread):
         mon_left, mon_top, mon_w, mon_h = monitor
         center_px = request.center_x * scale_x
         center_py = request.center_y * scale_y
-        extent = source_extent(request.diameter, request.zoom)
-        source_w = max(1.0, extent * scale_x)
-        source_h = max(1.0, extent * scale_y)
+        source_w = max(1.0, source_extent(request.width, request.zoom) * scale_x)
+        source_h = max(
+            1.0, source_extent(request.height, request.zoom) * scale_y
+        )
 
         capture_w = int(round(min(float(mon_w), max(64.0, source_w * self.MARGIN))))
         capture_h = int(round(min(float(mon_h), max(64.0, source_h * self.MARGIN))))

@@ -18,6 +18,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -31,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..config import Settings
+from ..config import Settings, lens_dimensions
 from ..gaze.engine import GazeEngine
 from ..gaze.tracker import EyeTracker
 from .icon import make_pixmap
@@ -56,6 +57,7 @@ class StatusInfo:
     calibration_level: str = "bad"
     can_calibrate: bool = False
     can_correct: bool = False
+    can_big: bool = False
     lens_visible: bool = True
     locked: bool = False
     demo: bool = False
@@ -181,6 +183,7 @@ class SettingsWindow(QWidget):
     calibrate_requested = Signal()
     freeze_requested = Signal()
     correct_requested = Signal()
+    big_lens_requested = Signal()
     camera_restart_requested = Signal(int)
     quit_requested = Signal()
     hidden_to_tray = Signal()
@@ -247,7 +250,7 @@ class SettingsWindow(QWidget):
         titles.addWidget(title)
         titles.addWidget(subtitle)
         header.addLayout(titles, 1)
-        version = QLabel("v0.3")
+        version = QLabel("v0.4")
         version.setObjectName("badge")
         header.addWidget(version, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(header)
@@ -304,10 +307,34 @@ class SettingsWindow(QWidget):
         )
         self.correct_button.clicked.connect(self.correct_requested.emit)
         lens_header.addWidget(self.correct_button)
+        self.big_button = QPushButton("Big lens")
+        self.big_button.setObjectName("ghost")
+        self.big_button.setCheckable(True)
+        self.big_button.setToolTip(
+            "Toggle a large lens sized to the screen (Ctrl+Alt+B)."
+        )
+        self.big_button.toggled.connect(self._toggle_big_lens)
+        lens_header.addWidget(self.big_button)
         self.show_lens = QCheckBox("Show lens")
         self.show_lens.toggled.connect(self._toggle_lens_visible)
         lens_header.addWidget(self.show_lens)
         lens_layout.addLayout(lens_header)
+
+        shape_row = QHBoxLayout()
+        shape_row.setSpacing(12)
+        shape_label = QLabel("Shape")
+        shape_label.setFixedWidth(84)
+        self.shape_combo = QComboBox()
+        self.shape_combo.addItem("Round", "round")
+        self.shape_combo.addItem("Square", "square")
+        self.shape_combo.addItem("Wide", "wide")
+        self.shape_combo.setToolTip(
+            "Lens shape. Wide keeps the chosen height and is 1.6x wider."
+        )
+        self.shape_combo.currentIndexChanged.connect(self._on_shape)
+        shape_row.addWidget(shape_label)
+        shape_row.addWidget(self.shape_combo, 1)
+        lens_layout.addLayout(shape_row)
 
         self.size_slider, self.size_value = self._slider_row(
             lens_layout,
@@ -315,7 +342,8 @@ class SettingsWindow(QWidget):
             Settings.DIAMETER_RANGE[0],
             Settings.DIAMETER_RANGE[1],
             10,
-            "Lens diameter in pixels.",
+            "Lens height in pixels; wide lenses are 1.6x wider. "
+            "Press Ctrl+Alt+B for a quick big lens.",
         )
         self.zoom_slider, self.zoom_value = self._slider_row(
             lens_layout,
@@ -421,6 +449,7 @@ class SettingsWindow(QWidget):
             ("Ctrl + Alt + F", "Freeze / unfreeze"),
             ("Ctrl + Alt + C", "Calibrate"),
             ("Ctrl + Alt + D", "Correct / drag the lens"),
+            ("Ctrl + Alt + B", "Big lens on / off"),
             ("Ctrl + Alt + = / -", "Zoom in / out"),
             ("Ctrl + Alt + ] / [", "Grow / shrink lens"),
         ]
@@ -592,6 +621,19 @@ class SettingsWindow(QWidget):
                 color: #cfe4f7;
                 selection-background-color: #155e75;
             }
+            QComboBox {
+                background: #0d1928;
+                border: 1px solid #223a55;
+                border-radius: 7px;
+                padding: 3px 6px;
+                color: #cfe4f7;
+            }
+            QComboBox::drop-down { border: none; width: 20px; }
+            QComboBox QAbstractItemView {
+                background: #0b1523;
+                color: #dbeafe;
+                selection-background-color: #155e75;
+            }
             QToolTip {
                 background: #0b1523;
                 color: #dbeafe;
@@ -679,6 +721,9 @@ class SettingsWindow(QWidget):
         self._syncing = True
         try:
             self.size_slider.setValue(self.settings.diameter)
+            index = self.shape_combo.findData(self.settings.shape)
+            if index >= 0:
+                self.shape_combo.setCurrentIndex(index)
             self.zoom_slider.setValue(int(round(self.settings.zoom * 100)))
             self.smoothing_slider.setValue(int(round(self.settings.smoothing * 100)))
             self.opacity_slider.setValue(int(round(self.settings.opacity * 100)))
@@ -700,6 +745,7 @@ class SettingsWindow(QWidget):
         self.detail_label.setText(info.calibration_detail)
         self.calibrate_button.setEnabled(info.can_calibrate)
         self.correct_button.setEnabled(info.can_correct)
+        self.big_button.setEnabled(info.can_big)
         self.calibrate_button.setText(
             "Recalibrate" if info.calibration_text != "Not calibrated" else "Calibrate now"
         )
@@ -741,6 +787,13 @@ class SettingsWindow(QWidget):
         finally:
             self._syncing = False
 
+    def set_big_lens(self, active: bool) -> None:
+        self._syncing = True
+        try:
+            self.big_button.setChecked(active)
+        finally:
+            self._syncing = False
+
     # ----------------------------------------------------------------- controls
     def _commit(self) -> None:
         self.settings.normalized()
@@ -748,7 +801,14 @@ class SettingsWindow(QWidget):
         self.settings_changed.emit()
 
     def _update_value_labels(self) -> None:
-        self.size_value.setText(f"{self.settings.diameter} px")
+        width, height = lens_dimensions(
+            self.settings.shape, self.settings.diameter
+        )
+        self.size_value.setText(
+            f"{width}×{height} px"
+            if self.settings.shape == "wide"
+            else f"{height} px"
+        )
         self.zoom_value.setText(f"{self.settings.zoom:.2f}×")
         smoothing = self.settings.smoothing
         if smoothing < 0.25:
@@ -769,6 +829,13 @@ class SettingsWindow(QWidget):
         if self._syncing:
             return
         self.settings.diameter = int(value)
+        self._commit()
+
+    def _on_shape(self, _index: int) -> None:
+        if self._syncing:
+            return
+        shape = self.shape_combo.currentData()
+        self.settings.shape = str(shape)
         self._commit()
 
     def _on_zoom(self, value: int) -> None:
@@ -812,6 +879,11 @@ class SettingsWindow(QWidget):
             return
         self.freeze_requested.emit()
 
+    def _toggle_big_lens(self, checked: bool) -> None:
+        if self._syncing:
+            return
+        self.big_lens_requested.emit()
+
     def _restart_camera(self) -> None:
         self.camera_restart_requested.emit(int(self.camera_spin.value()))
 
@@ -820,6 +892,9 @@ class SettingsWindow(QWidget):
         self._syncing = True
         try:
             self.size_slider.setValue(defaults.diameter)
+            index = self.shape_combo.findData(defaults.shape)
+            if index >= 0:
+                self.shape_combo.setCurrentIndex(index)
             self.zoom_slider.setValue(int(defaults.zoom * 100))
             self.smoothing_slider.setValue(int(defaults.smoothing * 100))
             self.opacity_slider.setValue(int(defaults.opacity * 100))
@@ -828,6 +903,7 @@ class SettingsWindow(QWidget):
         finally:
             self._syncing = False
         self.settings.diameter = defaults.diameter
+        self.settings.shape = defaults.shape
         self.settings.zoom = defaults.zoom
         self.settings.smoothing = defaults.smoothing
         self.settings.opacity = defaults.opacity

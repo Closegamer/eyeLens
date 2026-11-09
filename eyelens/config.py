@@ -126,6 +126,7 @@ class Settings:
 
     schema: int = 2
     diameter: int = 280
+    shape: str = "round"
     zoom: float = 2.0
     smoothing: float = 0.72
     opacity: float = 0.98
@@ -134,7 +135,9 @@ class Settings:
     lens_visible: bool = True
     camera_index: int = 0
 
-    DIAMETER_RANGE = (120, 600)
+    DIAMETER_RANGE = (120, 1200)
+    SHAPE_OPTIONS = ("round", "square", "wide")
+    WIDE_ASPECT = 1.6
     ZOOM_RANGE = (1.0, 6.0)
     SMOOTHING_RANGE = (0.0, 1.0)
     OPACITY_RANGE = (0.4, 1.0)
@@ -167,6 +170,8 @@ class Settings:
         self.diameter = int(
             _clamp(float(self.diameter), *self.DIAMETER_RANGE)
         )
+        shape = str(self.shape).strip().lower()
+        self.shape = shape if shape in self.SHAPE_OPTIONS else "round"
         self.zoom = round(_clamp(float(self.zoom), *self.ZOOM_RANGE), 2)
         self.smoothing = _clamp(float(self.smoothing), *self.SMOOTHING_RANGE)
         self.opacity = _clamp(float(self.opacity), *self.OPACITY_RANGE)
@@ -181,6 +186,27 @@ class Settings:
 
     def copy(self) -> Settings:
         return Settings(**asdict(self))
+
+
+def preferred_big_diameter(screen_height: int) -> int:
+    """A large but still on-screen lens size for the Big lens toggle."""
+    low, high = Settings.DIAMETER_RANGE
+    return int(max(low, min(high, round(max(screen_height, low) * 0.85))))
+
+
+def lens_dimensions(shape: str, diameter: int) -> tuple[int, int]:
+    """Return (width, height) in logical pixels for a lens shape.
+
+    ``diameter`` is the height for every shape.  A wide lens keeps that height
+    and is 1.6x wider.
+    """
+    height = int(max(1, int(diameter)))
+    width = (
+        int(round(height * Settings.WIDE_ASPECT))
+        if str(shape).lower() == "wide"
+        else height
+    )
+    return width, height
 
 
 @dataclass(frozen=True)
