@@ -4,7 +4,7 @@
 **Status:** v0.3.0 implemented, tested and pushed. Nothing running. Real-mouse and
 real-face correction quality are the first pending tests.
 **Repo:** `https://github.com/Closegamer/eyeLens` (private, branch `main`)
-**Code commit:** `9500bd7` · tag `v0.3.0`
+**Code commit:** `9500bd7` · follow-up `632cd1e` · tag `v0.3.0`
 **Chain:** `standalone-08a28c4a` seq 3
 
 ## What changed in v0.3.0

@@ -173,5 +173,7 @@ run.bat
 
 **Closed at:** 2026-11-09
 **Commit:** `9500bd7` pushed to `origin/main`; tag `v0.3.0` pushed.
+Follow-up `632cd1e` on `main` tightens the correction replacement radius and
+guards handle teardown.
 **Status:** Implemented and synthetically verified. Real mouse drag and
 real-face correction quality remain the acceptance tests.
