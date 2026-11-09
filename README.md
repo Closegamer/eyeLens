@@ -25,6 +25,9 @@ to read, then unfreeze it and continue working.
   independent check points.
 - **Zoomed eye preview** — calibration shows a large close-up of both eyes plus
   a small whole-face inset, so positioning and iris tracking are easy to check.
+- **Head-pose compensation** — MediaPipe’s 6-DOF face transform is used for an
+  optional global correction. When enabled, moving your head recalculates the
+  mapping so the lens keeps following the same screen point.
 - **Variable lens** — 120–1200 px high, round / square / wide (1.6× wider),
   1×–6× magnification, adjustable opacity.
 - **Big lens on demand** — press `Ctrl+Alt+B` for a screen-sized lens; press
@@ -90,7 +93,9 @@ In demo mode the lens follows the mouse pointer instead of your eyes.
 4. After the 25th dot, eyeLens repeats a short 9-dot **accuracy check** on
    points it did not train on. This measures the real error instead of guessing.
 5. When the result appears, press **Enter** to keep the calibration or **R** to
-   try again. The checked error is shown in pixels.
+   try again. The checked error is shown in pixels. If a head-pose correction
+   improves the held-out check, the result also says **head pose**; that is the
+   layer that recalculates the mapping when your head moves.
 6. The lens appears and starts following your gaze.
 
 Calibration is personal and tied to the current screen geometry. Recalibrate if
@@ -142,6 +147,8 @@ webcam ──► MediaPipe Face Landmarker (478 landmarks, both irises)
             iris position in each eye, vergence, plus head/face diagnostics
        ──► fitted model uses the 8 eye-in-head features
             (raw head/face drift made held-out accuracy much worse)
+       ──► optional global head-pose correction from MediaPipe's 6-DOF face
+            transform; enabled only if it improves the 9 held-out points
        ──► per-user hybrid model (eye-term polynomial + kernel-ridge residual)
             trained on 25 screen targets with grouped leave-one-point-out
             cross-validation; a separate 9-point check measures real error
@@ -157,6 +164,10 @@ A few implementation details that matter:
   translation features are kept for diagnostics and for the live “head moved”
   calibration warning; using them as predictors made held-out accuracy much
   worse on real calibration data.
+- Head pose (face forward vector + translation) is collected with every sample.
+  A strongly regularised global correction is fitted on the primary residuals
+  and enabled only if it improves the 9 held-out points by at least 3% and
+  5 px. This is the layer that recalculates the mapping when your head moves.
 - Calibration shuffles the dot order and watches the head pose. If you drift
   from the starting position, it warns and stops collecting samples for that
   point, then retries it.
@@ -220,6 +231,12 @@ decrease it if it feels sluggish.
 Press `Ctrl+Alt+D`, drag the small handle to where you are actually looking,
 and release. eyeLens stores a local correction and keeps it. Repeat in other
 screen regions if needed. Recalibrate to discard all corrections and start over.
+
+**The lens drifts when I move my head.**
+Recalibrate. Calibration records your head pose at every dot and adds a global
+head-pose correction if it improves the 9 held-out points by at least 3% and
+5 px. When that correction is active, the status shows **head pose**. If it is
+not shown, the eye-only mapping was more accurate for your data.
 
 **The lens shows a mirror image of itself.**
 This should not happen on Windows 10 2004+ / Windows 11. If you see a warning in

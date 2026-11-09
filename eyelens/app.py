@@ -575,6 +575,9 @@ class EyeLensApp(QObject):
         features = self.tracker.recent_features(
             seconds=0.5, since=self._correction_release_at
         )
+        head_pose = self.tracker.recent_head_pose(
+            seconds=0.5, since=self._correction_release_at
+        )
         if features is None:
             self.overlay.finish_correction(False)
             self._notify(
@@ -584,7 +587,9 @@ class EyeLensApp(QObject):
             )
             return
         try:
-            new_model = self.model.with_correction(features, target)
+            new_model = self.model.with_correction(
+                features, target, head_pose
+            )
         except (ValueError, FloatingPointError) as exc:
             print(f"eyeLens: correction failed: {exc}", file=sys.stderr)
             self.overlay.finish_correction(False)

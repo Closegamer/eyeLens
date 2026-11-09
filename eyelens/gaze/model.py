@@ -29,6 +29,7 @@ import numpy as np
 from .features import (
     FEATURE_NAMES,
     FEATURE_VERSION,
+    HEAD_POSE_FEATURES,
     MODEL_FEATURE_INDICES,
     MODEL_MODE,
     expand_features,
@@ -68,6 +69,8 @@ class CalibrationMetrics:
     krr_alpha: float = 0.0
     krr_weight: float = 0.0
     corrections: int = 0
+    pose_weight: float = 0.0
+    pose_alpha: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -87,6 +90,8 @@ class CalibrationMetrics:
             krr_alpha=float(raw.get("krr_alpha", 0.0)),
             krr_weight=float(raw.get("krr_weight", 0.0)),
             corrections=int(raw.get("corrections", 0)),
+            pose_weight=float(raw.get("pose_weight", 0.0)),
+            pose_alpha=float(raw.get("pose_alpha", 0.0)),
         )
 
 
@@ -94,6 +99,69 @@ class CalibrationMetrics:
 class GazePrediction:
     x: float
     y: float
+
+
+@dataclass(frozen=True)
+class PoseCorrection:
+    """A small global correction from head pose to screen offset."""
+
+    mean: np.ndarray
+    std: np.ndarray
+    coef: np.ndarray
+    intercept: np.ndarray
+    clip_low: np.ndarray
+    clip_high: np.ndarray
+    limit: float
+
+    def apply(self, pose: np.ndarray) -> np.ndarray:
+        values = np.asarray(pose, dtype=np.float64).reshape(-1)
+        if values.size != self.mean.size or not np.all(np.isfinite(values)):
+            return np.zeros(2, dtype=np.float64)
+        values = np.clip(values, self.clip_low, self.clip_high)
+        scaled = (values - self.mean) / self.std
+        offset = scaled @ self.coef + self.intercept
+        if self.limit > 0.0:
+            offset = np.clip(offset, -self.limit, self.limit)
+        return offset
+
+
+POSE_ALPHAS = np.asarray([0.1, 1.0, 10.0], dtype=np.float64)
+
+
+def fit_pose_correction(
+    poses: np.ndarray, residuals: np.ndarray, alpha: float
+) -> PoseCorrection:
+    """Ridge-map head pose to a global screen-space residual."""
+    poses = np.asarray(poses, dtype=np.float64)
+    residuals = np.asarray(residuals, dtype=np.float64)
+    if poses.ndim != 2 or residuals.shape != (poses.shape[0], 2):
+        raise ValueError("pose correction data has the wrong shape")
+    mean = poses.mean(axis=0)
+    std = poses.std(axis=0)
+    std[std < 1e-8] = 1.0
+    scaled = (poses - mean) / std
+    x_mean = scaled.mean(axis=0)
+    y_mean = residuals.mean(axis=0)
+    x_centered = scaled - x_mean
+    y_centered = residuals - y_mean
+    gram = x_centered.T @ x_centered
+    gram.flat[:: gram.shape[0] + 1] += float(alpha)
+    coef = _solve(gram, x_centered.T @ y_centered)
+    intercept = y_mean - x_mean @ coef
+    pose_range = np.maximum(poses.max(axis=0) - poses.min(axis=0), 1e-6)
+    clip_low = poses.min(axis=0) - 0.20 * pose_range
+    clip_high = poses.max(axis=0) + 0.20 * pose_range
+    residual_norms = np.linalg.norm(residuals, axis=1)
+    limit = max(120.0, 1.5 * float(np.percentile(residual_norms, 95)))
+    return PoseCorrection(
+        mean=np.asarray(mean, dtype=np.float64),
+        std=np.asarray(std, dtype=np.float64),
+        coef=np.asarray(coef, dtype=np.float64),
+        intercept=np.asarray(intercept, dtype=np.float64),
+        clip_low=np.asarray(clip_low, dtype=np.float64),
+        clip_high=np.asarray(clip_high, dtype=np.float64),
+        limit=float(limit),
+    )
 
 
 def _solve(matrix: np.ndarray, rhs: np.ndarray) -> np.ndarray:
@@ -163,8 +231,9 @@ def _cap_samples(
     samples: np.ndarray,
     targets: np.ndarray,
     point_ids: np.ndarray,
+    poses: np.ndarray | None = None,
     limit: int = _MAX_SAMPLES_PER_POINT,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
     """Keep the most typical ``limit`` frames per calibration target.
 
     A 50-second calibration can produce well over a thousand frames.  The
@@ -182,7 +251,8 @@ def _cap_samples(
         selected.extend(int(index) for index in indices)
     selected.sort()
     chosen = np.asarray(selected, dtype=np.int64)
-    return samples[chosen], targets[chosen], point_ids[chosen]
+    chosen_poses = poses[chosen] if poses is not None else None
+    return samples[chosen], targets[chosen], point_ids[chosen], chosen_poses
 
 
 def _ridge_cv(
@@ -352,6 +422,10 @@ class GazeModel:
         krr_residual_limit: float = 0.0,
         correction_features: np.ndarray | None = None,
         correction_offsets: np.ndarray | None = None,
+        pose_correction: PoseCorrection | None = None,
+        pose_samples: np.ndarray | None = None,
+        pose_weight: float = 0.0,
+        pose_alpha: float = 0.0,
         created_at: str | None = None,
     ) -> None:
         self.raw_mean = np.asarray(raw_mean, dtype=np.float64)
@@ -403,6 +477,14 @@ class GazeModel:
             self._correction_scaled = np.zeros(
                 (0, len(FEATURE_NAMES)), dtype=np.float64
             )
+        self.pose_correction = pose_correction
+        self.pose_samples = (
+            np.asarray(pose_samples, dtype=np.float64)
+            if pose_samples is not None
+            else np.zeros((0, len(HEAD_POSE_FEATURES)), dtype=np.float64)
+        )
+        self.pose_weight = float(pose_weight)
+        self.pose_alpha = float(pose_alpha)
         self.created_at = created_at or time.strftime("%Y-%m-%dT%H:%M:%S")
 
     # ------------------------------------------------------------------ fit
@@ -419,6 +501,9 @@ class GazeModel:
         corrections: int = 0,
         correction_features: np.ndarray | None = None,
         correction_offsets: np.ndarray | None = None,
+        pose_samples: np.ndarray | None = None,
+        pose_alpha: float = 0.0,
+        pose_weight: float = 0.0,
     ) -> GazeModel:
         samples = np.asarray(samples, dtype=np.float64)
         targets = np.asarray(targets, dtype=np.float64)
@@ -429,13 +514,23 @@ class GazeModel:
             raise ValueError("calibration targets have the wrong shape")
         if point_ids.size != samples.shape[0]:
             raise ValueError("calibration point ids have the wrong shape")
+        pose_values = None
+        if pose_samples is not None:
+            pose_values = np.asarray(pose_samples, dtype=np.float64)
+            if pose_values.shape != (
+                samples.shape[0],
+                len(HEAD_POSE_FEATURES),
+            ):
+                raise ValueError("head pose samples have the wrong shape")
+            if not np.all(np.isfinite(pose_values)):
+                raise ValueError("head pose samples contain non-finite values")
         unique_points = np.unique(point_ids)
         if unique_points.size < _MIN_POINTS:
             raise ValueError(
                 f"at least {_MIN_POINTS} calibration points are required"
             )
-        samples, targets, point_ids = _cap_samples(
-            samples, targets, point_ids
+        samples, targets, point_ids, pose_values = _cap_samples(
+            samples, targets, point_ids, pose_values
         )
         unique_points = np.unique(point_ids)
 
@@ -498,6 +593,33 @@ class GazeModel:
                 1.5 * float(np.percentile(residual_norms, 95)),
             )
 
+        # Optional global head-pose correction.  The calibration window
+        # selects pose_weight/pose_alpha on held-out points; fit() only fits
+        # the coefficients when the caller enabled it.
+        pose_correction: PoseCorrection | None = None
+        stored_pose_samples: np.ndarray | None = None
+        pose_weight_value = 0.0
+        pose_alpha_value = 0.0
+        if pose_weight > 0.0 and pose_values is not None:
+            base_train = train_pred.copy()
+            if krr_weight > 0.0 and krr_coef is not None:
+                kernel = _rbf_matrix(raw_scaled, raw_scaled, krr_gamma)
+                residual = kernel @ krr_coef
+                if krr_residual_limit > 0.0:
+                    residual = np.clip(
+                        residual,
+                        -krr_residual_limit,
+                        krr_residual_limit,
+                    )
+                base_train = base_train + krr_weight * residual
+            selected_alpha = float(pose_alpha) if pose_alpha > 0 else 10.0
+            pose_correction = fit_pose_correction(
+                pose_values, targets - base_train, selected_alpha
+            )
+            stored_pose_samples = pose_values
+            pose_weight_value = float(pose_weight)
+            pose_alpha_value = selected_alpha
+
         worst = float(np.sqrt(max(selected_per_point.values(), default=0.0)))
 
         # Clip unseen inputs with a modest extrapolation allowance so a bad
@@ -521,6 +643,8 @@ class GazeModel:
             krr_alpha=float(krr_alpha) if krr_weight > 0 else 0.0,
             krr_weight=float(krr_weight),
             corrections=int(corrections),
+            pose_weight=pose_weight_value,
+            pose_alpha=pose_alpha_value,
         )
         return cls(
             raw_mean=raw_mean,
@@ -544,6 +668,10 @@ class GazeModel:
             krr_residual_limit=krr_residual_limit,
             correction_features=correction_features,
             correction_offsets=correction_offsets,
+            pose_correction=pose_correction,
+            pose_samples=stored_pose_samples,
+            pose_weight=pose_weight_value,
+            pose_alpha=pose_alpha_value,
         )
 
     # -------------------------------------------------------------- predict
@@ -586,19 +714,30 @@ class GazeModel:
             return np.zeros(2, dtype=np.float64)
         return (weights @ self.correction_offsets) / total
 
-    def predict(self, values: np.ndarray) -> GazePrediction:
+    def predict(
+        self, values: np.ndarray, head_pose: np.ndarray | None = None
+    ) -> GazePrediction:
         raw = np.asarray(values, dtype=np.float64).reshape(-1)
         if raw.size != len(FEATURE_NAMES):
             raise ValueError(f"expected {len(FEATURE_NAMES)} features")
         raw = select_model_features(raw)
         raw = np.clip(raw, self.clip_low, self.clip_high)
         out, raw_scaled = self._predict_base(raw)
+        if (
+            self.pose_weight > 0.0
+            and self.pose_correction is not None
+            and head_pose is not None
+        ):
+            out = out + self.pose_weight * self.pose_correction.apply(head_pose)
         out = out + self._correction_offset(raw_scaled)
         return GazePrediction(float(out[0]), float(out[1]))
 
     # ------------------------------------------------------ mouse correction
     def with_correction(
-        self, features: np.ndarray, target: tuple[float, float]
+        self,
+        features: np.ndarray,
+        target: tuple[float, float],
+        head_pose: np.ndarray | None = None,
     ) -> GazeModel:
         """Return a new model with a mouse-drag correction added.
 
@@ -627,6 +766,14 @@ class GazeModel:
         clip_high = np.maximum(self.clip_high, raw)
         raw = np.clip(raw, clip_low, clip_high)
         base, raw_scaled = self._predict_base(raw)
+        if (
+            self.pose_weight > 0.0
+            and self.pose_correction is not None
+            and head_pose is not None
+        ):
+            base = base + self.pose_weight * self.pose_correction.apply(
+                head_pose
+            )
         offset = target_values - base
 
         kept_features = self.correction_features
@@ -684,6 +831,12 @@ class GazeModel:
             krr_residual_limit=self.krr_residual_limit,
             correction_features=correction_features,
             correction_offsets=correction_offsets,
+            pose_correction=self.pose_correction,
+            pose_samples=(
+                self.pose_samples if self.pose_samples.size else None
+            ),
+            pose_weight=self.pose_weight,
+            pose_alpha=self.pose_alpha,
             created_at=self.created_at,
         )
 
@@ -718,6 +871,8 @@ class GazeModel:
         if self.metrics.corrections:
             count = self.metrics.corrections
             text += f" · {count} {'fix' if count == 1 else 'fixes'}"
+        if self.metrics.pose_weight > 0:
+            text += " · head pose"
         return text
 
     # ------------------------------------------------------------------- io
@@ -729,6 +884,11 @@ class GazeModel:
             "created_at": self.created_at,
             "screen": self.screen,
             "openness_threshold": self.openness_threshold,
+            "pose_samples": (
+                self.pose_samples.tolist() if self.pose_samples.size else None
+            ),
+            "pose_alpha": self.pose_alpha,
+            "pose_weight": self.pose_weight,
             "metrics": self.metrics.to_dict(),
             "samples": self.samples.tolist(),
             "targets": self.targets.tolist(),
@@ -771,6 +931,21 @@ class GazeModel:
             samples = np.asarray(raw["samples"], dtype=np.float64)
             targets = np.asarray(raw["targets"], dtype=np.float64)
             point_ids = np.asarray(raw["point_ids"], dtype=np.int64)
+            pose_samples = None
+            pose_alpha = float(raw.get("pose_alpha", 0.0))
+            pose_weight = float(raw.get("pose_weight", 0.0))
+            pose_items = raw.get("pose_samples")
+            if isinstance(pose_items, list) and pose_items:
+                pose_values = np.asarray(pose_items, dtype=np.float64)
+                if pose_values.shape == (
+                    samples.shape[0],
+                    len(HEAD_POSE_FEATURES),
+                ) and np.all(np.isfinite(pose_values)):
+                    pose_samples = pose_values
+                else:
+                    pose_weight = 0.0
+            else:
+                pose_weight = 0.0
             metrics = raw.get("metrics", {})
             validation = (
                 float(metrics.get("validation_rmse", 0.0))
@@ -798,6 +973,9 @@ class GazeModel:
                 validation_points = 0
                 corrections = 0
                 correction_items = []
+                pose_samples = None
+                pose_weight = 0.0
+                pose_alpha = 0.0
             else:
                 correction_items = raw.get("corrections", [])
             correction_features = None
@@ -828,6 +1006,9 @@ class GazeModel:
                 corrections=corrections,
                 correction_features=correction_features,
                 correction_offsets=correction_offsets,
+                pose_samples=pose_samples,
+                pose_weight=pose_weight,
+                pose_alpha=pose_alpha,
             )
             model.created_at = str(raw.get("created_at", model.created_at))
             return model

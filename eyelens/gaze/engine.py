@@ -101,7 +101,7 @@ class GazeEngine(QObject):
             return
 
         try:
-            prediction = self.model.predict(snap.features)
+            prediction = self.model.predict(snap.features, snap.head_pose)
         except (ValueError, FloatingPointError):
             return
 

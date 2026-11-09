@@ -119,6 +119,47 @@ _NAME_TO_INDEX = {name: i for i, name in enumerate(FEATURE_NAMES)}
 MODEL_FEATURE_INDICES: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6, 7)
 MODEL_MODE = "iris8"
 
+HEAD_POSE_FEATURES: tuple[str, ...] = (
+    "pose_fx",
+    "pose_fy",
+    "pose_fz",
+    "pose_tx",
+    "pose_ty",
+    "pose_tz",
+)
+
+
+def extract_head_pose(matrix: object) -> np.ndarray | None:
+    """Extract a compact head pose from MediaPipe's 4x4 face transform.
+
+    Returns six values: the face forward vector (three rotation components)
+    and the head translation in the canonical face units.  These are used only
+    for the optional head-pose correction layer; the base gaze model stays on
+    the eye features.
+    """
+    try:
+        pose = np.asarray(matrix, dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+    if pose.shape != (4, 4) or not np.all(np.isfinite(pose)):
+        return None
+    rotation = pose[:3, :3]
+    translation = pose[:3, 3]
+    values = np.array(
+        [
+            rotation[0, 2],
+            rotation[1, 2],
+            rotation[2, 2],
+            translation[0],
+            translation[1],
+            translation[2],
+        ],
+        dtype=np.float64,
+    )
+    if not np.all(np.isfinite(values)):
+        return None
+    return values
+
 
 def select_model_features(values: np.ndarray) -> np.ndarray:
     """Return a copy of a feature vector with non-model features zeroed."""

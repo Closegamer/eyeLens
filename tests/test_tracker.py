@@ -20,6 +20,7 @@ def _snapshot(
     timestamp: float,
     values: np.ndarray | None,
     openness: float = 0.3,
+    head_pose: np.ndarray | None = None,
 ) -> TrackerSnapshot:
     return TrackerSnapshot(
         seq=seq,
@@ -28,6 +29,7 @@ def _snapshot(
         face_found=values is not None,
         timestamp=timestamp,
         fps=30.0,
+        head_pose=head_pose,
     )
 
 
@@ -60,6 +62,31 @@ def test_recent_features_rejects_blinks_and_missing_face() -> None:
     for index in range(6):
         tracker._history.append(_snapshot(index, now - 0.2, None))
     assert tracker.recent_features(seconds=1.0) is None
+
+
+def test_recent_head_pose_returns_median() -> None:
+    tracker = EyeTracker(None)
+    now = time.monotonic()
+    values = np.zeros(len(FEATURE_NAMES))
+    poses = [
+        np.array([0.1 * index, 0.0, 1.0, 10.0, 20.0, -60.0])
+        for index in range(5)
+    ]
+    for index, pose in enumerate(poses):
+        tracker._history.append(
+            _snapshot(
+                index,
+                now - 0.2 + 0.01 * index,
+                values,
+                head_pose=pose,
+            )
+        )
+    result = tracker.recent_head_pose(seconds=1.0)
+    assert result is not None
+    assert np.allclose(result, np.median(np.vstack(poses), axis=0))
+    tracker._history.clear()
+    tracker._history.append(_snapshot(0, now, values))
+    assert tracker.recent_head_pose(seconds=1.0) is None
 
 
 def test_eye_crop_box_is_zoomed_and_inside_the_frame() -> None:

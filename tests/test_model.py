@@ -179,6 +179,52 @@ def test_hybrid_uses_kernel_stage_for_nonlinear_mapping() -> None:
     assert model.metrics.loo_rmse < 40.0
 
 
+def test_pose_correction_recovers_pose_dependent_offset(tmp_path) -> None:
+    samples, targets, point_ids = make_dataset()
+    rng = np.random.default_rng(21)
+    poses = rng.normal(0.0, 1.0, (samples.shape[0], 6))
+    shifted = targets.copy()
+    shifted[:, 0] += 400.0 * poses[:, 0]
+    shifted[:, 1] += 300.0 * poses[:, 1]
+
+    base = GazeModel.fit(samples, shifted, point_ids, 0.12, SCREEN.to_dict())
+    posed = GazeModel.fit(
+        samples,
+        shifted,
+        point_ids,
+        0.12,
+        SCREEN.to_dict(),
+        pose_samples=poses,
+        pose_alpha=0.01,
+        pose_weight=1.0,
+    )
+    index = 50
+    base_error = np.linalg.norm(
+        np.asarray([base.predict(samples[index]).x, base.predict(samples[index]).y])
+        - shifted[index]
+    )
+    posed_prediction = posed.predict(samples[index], poses[index])
+    posed_error = np.linalg.norm(
+        np.asarray([posed_prediction.x, posed_prediction.y]) - shifted[index]
+    )
+    assert posed.metrics.pose_weight == 1.0
+    assert posed.metrics.pose_alpha == 0.01
+    assert posed.pose_samples.shape == (samples.shape[0], 6)
+    assert posed_error < base_error * 0.6
+
+    path = tmp_path / "posed.json"
+    posed.save(path)
+    loaded = GazeModel.load(path)
+    assert loaded is not None
+    assert loaded.metrics.pose_weight == 1.0
+    restored = loaded.predict(samples[index], poses[index])
+    assert abs(restored.x - posed_prediction.x) < 1e-6
+    assert abs(restored.y - posed_prediction.y) < 1e-6
+    # Without a pose the correction is not applied.
+    no_pose = loaded.predict(samples[index])
+    assert abs(no_pose.x - restored.x) > 1.0
+
+
 def test_mouse_correction_moves_prediction_and_persists(tmp_path) -> None:
     samples, targets, point_ids = make_dataset()
     model = GazeModel.fit(samples, targets, point_ids, 0.12, SCREEN.to_dict())

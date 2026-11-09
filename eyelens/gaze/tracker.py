@@ -14,7 +14,7 @@ import numpy as np
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
-from .features import EyeFeatures, extract_features
+from .features import EyeFeatures, extract_features, extract_head_pose
 
 PREVIEW_WIDTH = 480
 PREVIEW_HEIGHT = 270
@@ -87,6 +87,7 @@ class TrackerSnapshot:
     face_found: bool
     timestamp: float
     fps: float
+    head_pose: np.ndarray | None = None
 
     @property
     def eyes_open(self) -> bool:
@@ -197,6 +198,26 @@ class EyeTracker(QThread):
                 matrix = matrix[keep]
         return np.median(matrix, axis=0)
 
+    def recent_head_pose(
+        self, seconds: float = 0.5, since: float | None = None
+    ) -> np.ndarray | None:
+        """Median head pose from the recent hold window, if available."""
+        cutoff = time.monotonic() - max(0.05, float(seconds))
+        if since is not None:
+            cutoff = max(cutoff, float(since))
+        with self._lock:
+            history = list(self._history)
+        poses = [
+            snap.head_pose
+            for snap in history
+            if snap.timestamp >= cutoff
+            and snap.face_found
+            and snap.head_pose is not None
+        ]
+        if len(poses) < 3:
+            return None
+        return np.median(np.vstack(poses), axis=0)
+
     def _set_status(self, text: str) -> None:
         with self._lock:
             changed = text != self._status
@@ -243,6 +264,7 @@ class EyeTracker(QThread):
                 min_face_detection_confidence=0.5,
                 min_face_presence_confidence=0.5,
                 min_tracking_confidence=0.5,
+                output_facial_transformation_matrixes=True,
             )
             landmarker = vision.FaceLandmarker.create_from_options(options)
 
@@ -304,11 +326,16 @@ class EyeTracker(QThread):
 
                 features: EyeFeatures | None = None
                 face_found = bool(result.face_landmarks)
+                head_pose = None
                 if face_found:
                     features = extract_features(
                         result.face_landmarks[0], width, height
                     )
                     face_found = features is not None
+                    if result.facial_transformation_matrixes:
+                        head_pose = extract_head_pose(
+                            result.facial_transformation_matrixes[0]
+                        )
 
                 if face_found != last_face:
                     last_face = face_found
@@ -330,6 +357,7 @@ class EyeTracker(QThread):
                         # monotonic clock, not perf_counter.
                         timestamp=time.monotonic(),
                         fps=fps,
+                        head_pose=head_pose,
                     )
                 )
 

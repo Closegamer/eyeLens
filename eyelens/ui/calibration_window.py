@@ -25,7 +25,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from ..gaze.features import FEATURE_NAMES
-from ..gaze.model import GazeModel
+from ..gaze.model import POSE_ALPHAS, GazeModel, fit_pose_correction
 from ..gaze.tracker import EyeTracker
 from .overlay import screen_info
 
@@ -91,10 +91,13 @@ class CalibrationWindow(QWidget):
         self._point_index = 0
         self._retried = False
         self._retry_reason = ""
-        self._current_samples: list[tuple[np.ndarray, float]] = []
+        self._current_samples: list[
+            tuple[np.ndarray, float, np.ndarray | None]
+        ] = []
         self._samples: list[np.ndarray] = []
         self._targets: list[list[float]] = []
         self._point_id_list: list[int] = []
+        self._pose_list: list[np.ndarray | None] = []
         self._all_openness: list[float] = []
         self._last_seq = -1
         self._face_found = False
@@ -273,6 +276,7 @@ class CalibrationWindow(QWidget):
         self._samples = []
         self._targets = []
         self._point_id_list = []
+        self._pose_list = []
         self._all_openness = []
         self._model = None
         self._primary_model = None
@@ -313,7 +317,9 @@ class CalibrationWindow(QWidget):
         self._begin_countdown()
 
     def _finish_point(self) -> None:
-        accepted = self._filter_current_samples()
+        filtered = self._filter_current_samples()
+        accepted = filtered[0] if filtered is not None else None
+        poses = filtered[1] if filtered is not None else None
         if accepted is None or accepted.shape[0] < 6:
             if not self._retried:
                 self._retried = True
@@ -345,10 +351,13 @@ class CalibrationWindow(QWidget):
         point_id = self._point_index + (
             len(self._primary_points) if self._validating else 0
         )
-        for row in accepted:
+        if poses is not None and len(poses) != len(accepted):
+            poses = None
+        for index, row in enumerate(accepted):
             self._samples.append(row)
             self._targets.append([target[0], target[1]])
             self._point_id_list.append(point_id)
+            self._pose_list.append(poses[index] if poses is not None else None)
         self._point_index += 1
         self._retried = False
         self._retry_reason = ""
@@ -382,6 +391,102 @@ class CalibrationWindow(QWidget):
             return 0.0
         return float(np.sqrt(np.mean(list(per_point.values()))))
 
+    @staticmethod
+    def _point_rmse(
+        predictions: np.ndarray,
+        targets: np.ndarray,
+        point_ids: np.ndarray,
+    ) -> float:
+        per_point: dict[int, float] = {}
+        for point in np.unique(point_ids):
+            mask = point_ids == point
+            error = predictions[mask] - targets[mask]
+            per_point[int(point)] = float(
+                np.mean(np.sum(np.square(error), axis=1))
+            )
+        if not per_point:
+            return 0.0
+        return float(np.sqrt(np.mean(list(per_point.values()))))
+
+    def _available_pose_samples(self) -> np.ndarray | None:
+        if (
+            not self._pose_list
+            or len(self._pose_list) != len(self._samples)
+            or any(pose is None for pose in self._pose_list)
+        ):
+            return None
+        return np.vstack(self._pose_list)
+
+    def _select_pose_correction(
+        self, primary: GazeModel
+    ) -> tuple[float, float, float]:
+        """Choose whether a global head-pose correction helps held-out points.
+
+        Returns (validation_rmse, pose_alpha, pose_weight).  The correction is
+        fitted on the primary training residuals and accepted only if it
+        improves the independent 9-point validation by at least 2%.
+        """
+        base_validation = self._validation_error(primary)
+        poses = self._available_pose_samples()
+        start = self._validation_start
+        if (
+            poses is None
+            or start <= 0
+            or start >= len(self._samples)
+            or self._primary_model is None
+        ):
+            return base_validation, 0.0, 0.0
+        primary_targets = np.asarray(
+            self._targets[:start], dtype=np.float64
+        )
+        validation_targets = np.asarray(
+            self._targets[start:], dtype=np.float64
+        )
+        validation_ids = np.asarray(
+            self._point_id_list[start:], dtype=np.int64
+        )
+        primary_predictions = np.asarray(
+            [
+                [prediction.x, prediction.y]
+                for prediction in (
+                    primary.predict(row) for row in self._samples[:start]
+                )
+            ],
+            dtype=np.float64,
+        )
+        base_validation_predictions = np.asarray(
+            [
+                [prediction.x, prediction.y]
+                for prediction in (
+                    primary.predict(row) for row in self._samples[start:]
+                )
+            ],
+            dtype=np.float64,
+        )
+        residuals = primary_targets - primary_predictions
+        best_validation = base_validation
+        best_alpha = 0.0
+        best_weight = 0.0
+        for alpha in POSE_ALPHAS:
+            correction = fit_pose_correction(
+                poses[:start], residuals, float(alpha)
+            )
+            corrected = base_validation_predictions + np.asarray(
+                [correction.apply(pose) for pose in poses[start:]],
+                dtype=np.float64,
+            )
+            value = self._point_rmse(
+                corrected, validation_targets, validation_ids
+            )
+            if (
+                value < best_validation * 0.97
+                and best_validation - value >= 5.0
+            ):
+                best_validation = value
+                best_alpha = float(alpha)
+                best_weight = 1.0
+        return best_validation, best_alpha, best_weight
+
     def _fit_model(self) -> None:
         if self._fit_started:
             return
@@ -406,8 +511,17 @@ class CalibrationWindow(QWidget):
                 return
 
             validation_rmse = 0.0
+            pose_alpha = 0.0
+            pose_weight = 0.0
             if self._primary_model is not None:
-                validation_rmse = self._validation_error(self._primary_model)
+                (
+                    validation_rmse,
+                    pose_alpha,
+                    pose_weight,
+                ) = self._select_pose_correction(self._primary_model)
+            final_poses = (
+                self._available_pose_samples() if pose_weight > 0 else None
+            )
             self._model = GazeModel.fit(
                 samples=samples,
                 targets=targets,
@@ -416,6 +530,9 @@ class CalibrationWindow(QWidget):
                 screen=info,
                 validation_rmse=validation_rmse,
                 validation_points=len(self._validation_points),
+                pose_samples=final_poses,
+                pose_alpha=pose_alpha,
+                pose_weight=pose_weight,
             )
             # Keep all dots visible and completed on the result screen.
             self._points = self._primary_points + self._validation_points
@@ -425,39 +542,55 @@ class CalibrationWindow(QWidget):
             self._error_message = f"Could not build the calibration model: {exc}"
             self._enter(Phase.ERROR)
 
-    def _filter_current_samples(self) -> np.ndarray | None:
+    def _filter_current_samples(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray | None] | None:
         if len(self._current_samples) < 7:
             return None
         openness = np.array([item[1] for item in self._current_samples])
         median_open = float(np.median(openness))
         threshold = max(0.055, median_open * 0.55)
-        rows = [
-            features
-            for features, value in self._current_samples
+        entries = [
+            (features, pose)
+            for features, value, pose in self._current_samples
             if value >= threshold
         ]
-        if len(rows) < 6:
+        if len(entries) < 6:
             return None
-        matrix = np.vstack(rows)
+        matrix = np.vstack([entry[0] for entry in entries])
+        poses = [entry[1] for entry in entries]
+
+        def apply_keep(keep: np.ndarray) -> None:
+            nonlocal matrix, poses
+            matrix = matrix[keep]
+            poses = [pose for pose, keep_row in zip(poses, keep) if keep_row]
+
         median = np.median(matrix, axis=0)
         mad = np.median(np.abs(matrix - median), axis=0) * 1.4826
         valid_dims = mad > 1e-6
         if np.any(valid_dims):
             deviation = np.abs(matrix[:, valid_dims] - median[valid_dims])
             z = deviation / mad[valid_dims]
-            keep = np.max(z, axis=1) <= 4.25
-            matrix = matrix[keep]
+            apply_keep(np.max(z, axis=1) <= 4.25)
             if matrix.shape[0] > 2:
                 # One refinement pass with the cleaned data.
                 median = np.median(matrix, axis=0)
                 mad = np.median(np.abs(matrix - median), axis=0) * 1.4826
                 valid_dims = mad > 1e-6
                 if np.any(valid_dims):
-                    deviation = np.abs(matrix[:, valid_dims] - median[valid_dims])
+                    deviation = np.abs(
+                        matrix[:, valid_dims] - median[valid_dims]
+                    )
                     z = deviation / mad[valid_dims]
-                    keep = np.max(z, axis=1) <= 4.0
-                    matrix = matrix[keep]
-        return matrix if matrix.shape[0] >= 6 else None
+                    apply_keep(np.max(z, axis=1) <= 4.0)
+        if matrix.shape[0] < 6:
+            return None
+        pose_matrix = (
+            None
+            if any(pose is None for pose in poses)
+            else np.vstack(poses)
+        )
+        return matrix, pose_matrix
 
     # -------------------------------------------------------------------- timer
     def _tick(self) -> None:
@@ -577,7 +710,9 @@ class CalibrationWindow(QWidget):
             return
         if not np.all(np.isfinite(features)):
             return
-        self._current_samples.append((features, float(snap.openness)))
+        self._current_samples.append(
+            (features, float(snap.openness), snap.head_pose)
+        )
         self._all_openness.append(float(snap.openness))
 
     # -------------------------------------------------------------------- paint
@@ -1038,11 +1173,17 @@ class CalibrationWindow(QWidget):
         painter.setPen(MUTED)
         painter.setFont(QFont("Segoe UI", 9))
         checked = model.metrics.validation_points > 0
-        where = (
-            f"Checked on {model.metrics.validation_points} independent points"
-            if checked
-            else "Estimated across the whole screen"
-        )
+        if checked and model.metrics.pose_weight > 0:
+            where = (
+                f"Checked on {model.metrics.validation_points} held-out points "
+                "(head-pose corrected)"
+            )
+        elif checked:
+            where = (
+                f"Checked on {model.metrics.validation_points} independent points"
+            )
+        else:
+            where = "Estimated across the whole screen"
         painter.drawText(
             QRectF(card.left() + 40, card.top() + 182, card.width() - 80, 52),
             Qt.AlignmentFlag.AlignHCenter | Qt.TextFlag.TextWordWrap,

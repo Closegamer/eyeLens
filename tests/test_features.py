@@ -20,6 +20,7 @@ from eyelens.gaze.features import (
     RIGHT_IRIS_CENTER,
     expand_features,
     extract_features,
+    extract_head_pose,
 )
 
 FRAME_W = 640
@@ -127,3 +128,14 @@ def test_expanded_feature_length() -> None:
     expanded = expand_features(features.values)
     assert expanded.shape == (len(EXPANDED_FEATURE_NAMES),)
     assert np.all(np.isfinite(expanded))
+
+
+def test_extract_head_pose() -> None:
+    matrix = np.eye(4)
+    matrix[:3, 3] = [10.0, 20.0, -60.0]
+    pose = extract_head_pose(matrix)
+    assert pose is not None
+    assert pose.shape == (6,)
+    assert np.allclose(pose, [0.0, 0.0, 1.0, 10.0, 20.0, -60.0])
+    assert extract_head_pose(None) is None
+    assert extract_head_pose(np.zeros((3, 3))) is None
