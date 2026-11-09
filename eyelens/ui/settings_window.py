@@ -250,7 +250,7 @@ class SettingsWindow(QWidget):
         titles.addWidget(title)
         titles.addWidget(subtitle)
         header.addLayout(titles, 1)
-        version = QLabel("v0.4")
+        version = QLabel("v0.5")
         version.setObjectName("badge")
         header.addWidget(version, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(header)

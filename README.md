@@ -23,6 +23,8 @@ to read, then unfreeze it and continue working.
 - **Guided 25-point calibration + 9-point accuracy check** — about 50 seconds,
   saveable and reusable. The result screen shows the error measured on the
   independent check points.
+- **Zoomed eye preview** — calibration shows a large close-up of both eyes plus
+  a small whole-face inset, so positioning and iris tracking are easy to check.
 - **Variable lens** — 120–1200 px high, round / square / wide (1.6× wider),
   1×–6× magnification, adjustable opacity.
 - **Big lens on demand** — press `Ctrl+Alt+B` for a screen-sized lens; press
@@ -79,6 +81,8 @@ In demo mode the lens follows the mouse pointer instead of your eyes.
 
 1. Launch eyeLens and sit comfortably in front of the webcam.
 2. Click **Calibrate now**. Keep your face fully visible and avoid backlighting.
+   The large **EYES** panel is a zoomed view of both eyes; the small **FACE**
+   inset shows the whole camera frame so you can check your framing.
 3. Look at each of the 25 dots **with your eyes only** while keeping your head
    still. The dot turns into a progress ring while samples are collected.
 4. After the 25th dot, eyeLens repeats a short 9-dot **accuracy check** on
@@ -151,6 +155,9 @@ A few implementation details that matter:
   eye frame, so a tilted head does not fake vertical gaze or a blink.
 - Calibration keeps every stable frame from each target (usually several hundred
   samples) and discards blink/outlier frames per target before fitting.
+- During calibration the camera preview crops a fixed-aspect region around both
+  eyes and upscales it, so the iris/eyelid landmarks are easy to see; a small
+  whole-face inset keeps framing visible.
 - The polynomial stage captures the global gaze trend; a kernel-ridge residual
   stage captures the local nonlinearity the polynomial misses. The kernel stage
   is only enabled when grouped cross-validation says it helps.
@@ -190,6 +197,10 @@ the webcam, then try another camera index in the settings window.
 **Calibration never starts.**
 Your face must be visible in the preview. Improve lighting, remove backlight,
 move closer to the camera, and make sure the correct camera is selected.
+
+**The EYES preview is black or not zoomed.**
+The zoomed view needs a detected face. Use the small FACE inset to centre your
+face, improve the lighting, and wait for the status pill to turn green.
 
 **The lens drifts or jumps.**
 Recalibrate. Keep your head still during calibration and look at the centre of

@@ -678,6 +678,7 @@ class EyeLensApp(QObject):
             return
         self.calibration_window = window
         self.tracker.preview_ready.connect(window.set_preview)
+        self.tracker.eyes_preview_ready.connect(window.set_eye_preview)
         window.finished.connect(self._on_calibration_finished)
         window.cancelled.connect(self._on_calibration_cancelled)
         window.setGeometry(self.screen.geometry())
@@ -690,6 +691,8 @@ class EyeLensApp(QObject):
         self.calibration_window = None
         with contextlib.suppress(RuntimeError, TypeError):
             self.tracker.preview_ready.disconnect(window.set_preview)
+        with contextlib.suppress(RuntimeError, TypeError):
+            self.tracker.eyes_preview_ready.disconnect(window.set_eye_preview)
 
     def _on_calibration_finished(self, model: GazeModel) -> None:
         window = self.calibration_window

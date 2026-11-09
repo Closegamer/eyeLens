@@ -18,6 +18,65 @@ from .features import EyeFeatures, extract_features
 
 PREVIEW_WIDTH = 480
 PREVIEW_HEIGHT = 270
+EYE_PREVIEW_WIDTH = 640
+EYE_PREVIEW_HEIGHT = 300
+EYE_LANDMARKS = (
+    33,
+    133,
+    159,
+    145,
+    468,
+    362,
+    263,
+    386,
+    374,
+    473,
+    70,
+    63,
+    105,
+    66,
+    107,
+    300,
+    293,
+    334,
+    296,
+    336,
+)
+
+
+def eye_crop_box(
+    eye_points: np.ndarray, frame_width: int, frame_height: int
+) -> tuple[int, int, int, int] | None:
+    """Return a zoomed, fixed-aspect crop around both eyes.
+
+    ``eye_points`` are pixel coordinates in the (already mirrored) frame.
+    The crop is centred on the eye/eyebrow band and clamped to the frame.
+    """
+    if eye_points.size == 0:
+        return None
+    min_x = float(np.min(eye_points[:, 0]))
+    max_x = float(np.max(eye_points[:, 0]))
+    min_y = float(np.min(eye_points[:, 1]))
+    max_y = float(np.max(eye_points[:, 1]))
+    span_x = max(max_x - min_x, 4.0)
+    span_y = max(max_y - min_y, 4.0)
+    aspect = EYE_PREVIEW_WIDTH / EYE_PREVIEW_HEIGHT
+    crop_w = max(span_x * 2.2, 160.0)
+    crop_h = max(crop_w / aspect, span_y * 1.8)
+    crop_w = max(crop_w, crop_h * aspect)
+    crop_w = min(crop_w, float(frame_width))
+    crop_h = min(crop_h, float(frame_height))
+    if crop_w < 1.0 or crop_h < 1.0:
+        return None
+    center_x = (min_x + max_x) * 0.5
+    center_y = (min_y + max_y) * 0.5
+    x0 = int(round(min(max(center_x - crop_w / 2.0, 0.0), frame_width - crop_w)))
+    y0 = int(round(min(max(center_y - crop_h / 2.0, 0.0), frame_height - crop_h)))
+    x1 = min(frame_width, x0 + int(round(crop_w)))
+    y1 = min(frame_height, y0 + int(round(crop_h)))
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return None
+    return x0, y0, x1, y1
 
 
 @dataclass(frozen=True)
@@ -38,6 +97,7 @@ class EyeTracker(QThread):
     """Runs camera + MediaPipe inference without blocking the UI thread."""
 
     preview_ready = Signal(QImage)
+    eyes_preview_ready = Signal(QImage)
     status_changed = Signal(str)
     face_changed = Signal(bool)
     fps_changed = Signal(float)
@@ -340,6 +400,17 @@ class EyeTracker(QThread):
             cap.release()
         return None, ""
 
+    @staticmethod
+    def _to_qimage(cv2, image) -> QImage:
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        return QImage(
+            rgb.data,
+            image.shape[1],
+            image.shape[0],
+            rgb.strides[0],
+            QImage.Format.Format_RGB888,
+        ).copy()
+
     def _emit_preview(self, cv2, frame, landmarks) -> None:
         try:
             preview = frame
@@ -347,12 +418,23 @@ class EyeTracker(QThread):
                 preview = cv2.cvtColor(preview, cv2.COLOR_GRAY2BGR)
             preview = cv2.flip(preview, 1)
             height, width = preview.shape[:2]
-            if landmarks:
-                points = landmarks[0]
+            points = landmarks[0] if landmarks else None
+            eye_crop = None
+            eye_box = None
+            if points is not None:
                 # Flip x coordinates so the preview behaves like a mirror.
                 def pt(index: int) -> tuple[int, int]:
                     lm = points[index]
                     return int((1.0 - lm.x) * width), int(lm.y * height)
+
+                eye_points = np.asarray(
+                    [pt(index) for index in EYE_LANDMARKS], dtype=np.float64
+                )
+                eye_box = eye_crop_box(eye_points, width, height)
+                if eye_box is not None:
+                    x0, y0, x1, y1 = eye_box
+                    # Copy: the full preview gets markers drawn after this.
+                    eye_crop = preview[y0:y1, x0:x1].copy()
 
                 xs = []
                 ys = []
@@ -378,20 +460,56 @@ class EyeTracker(QThread):
                     cv2.circle(preview, pt(iris), 5, (40, 120, 160), 1)
                 cv2.circle(preview, pt(1), 2, (200, 200, 200), -1)
 
-            preview = cv2.resize(
+            full = cv2.resize(
                 preview,
                 (PREVIEW_WIDTH, PREVIEW_HEIGHT),
                 interpolation=cv2.INTER_AREA,
             )
-            rgb = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
-            image = QImage(
-                rgb.data,
-                PREVIEW_WIDTH,
-                PREVIEW_HEIGHT,
-                rgb.strides[0],
-                QImage.Format.Format_RGB888,
-            ).copy()
-            self.preview_ready.emit(image)
+            self.preview_ready.emit(self._to_qimage(cv2, full))
+
+            if eye_crop is not None and eye_box is not None:
+                x0, y0, x1, y1 = eye_box
+                eye_preview = cv2.resize(
+                    eye_crop,
+                    (EYE_PREVIEW_WIDTH, EYE_PREVIEW_HEIGHT),
+                    interpolation=cv2.INTER_CUBIC,
+                )
+                scale_x = EYE_PREVIEW_WIDTH / max(1, x1 - x0)
+                scale_y = EYE_PREVIEW_HEIGHT / max(1, y1 - y0)
+
+                def eye_pt(index: int) -> tuple[int, int]:
+                    x, y = pt(index)
+                    return (
+                        int(round((x - x0) * scale_x)),
+                        int(round((y - y0) * scale_y)),
+                    )
+
+                for outer, inner, upper, lower, iris in (
+                    (33, 133, 159, 145, 468),
+                    (362, 263, 386, 374, 473),
+                ):
+                    cv2.line(
+                        eye_preview,
+                        eye_pt(outer),
+                        eye_pt(inner),
+                        (160, 160, 160),
+                        1,
+                    )
+                    for eye_point in (upper, lower):
+                        cv2.circle(
+                            eye_preview,
+                            eye_pt(eye_point),
+                            2,
+                            (160, 160, 160),
+                            -1,
+                        )
+                    cv2.circle(
+                        eye_preview, eye_pt(iris), 5, (40, 210, 255), -1
+                    )
+                    cv2.circle(eye_preview, eye_pt(iris), 8, (40, 120, 160), 1)
+                self.eyes_preview_ready.emit(
+                    self._to_qimage(cv2, eye_preview)
+                )
         except Exception:
             # Preview failures must never stop tracking.
             traceback.print_exc()

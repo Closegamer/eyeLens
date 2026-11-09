@@ -53,8 +53,10 @@ class CalibrationWindow(QWidget):
     cancelled = Signal()
 
     GRID_X = (0.05, 0.275, 0.5, 0.725, 0.95)
-    GRID_Y_TOP = 0.16
+    GRID_Y_TOP = 0.20
     GRID_Y_BOTTOM = 0.90
+    PREVIEW_RECT = QRectF(24, 24, 320, 150)
+    FACE_PILL_RECT = QRectF(24, 184, 260, 28)
     VALIDATION_GRID_X = (0.16, 0.5, 0.84)
     VALIDATION_GRID_Y = (0.28, 0.55, 0.82)
     SETTLE_SECONDS = 0.50
@@ -97,6 +99,7 @@ class CalibrationWindow(QWidget):
         self._face_found = False
         self._face_since: float | None = None
         self._preview: QImage | None = None
+        self._eye_preview: QImage | None = None
         self._model: GazeModel | None = None
         self._primary_model: GazeModel | None = None
         self._error_message = ""
@@ -139,7 +142,7 @@ class CalibrationWindow(QWidget):
         geometry = self.screen.geometry()
         width = float(geometry.width())
         height = float(geometry.height())
-        top_y = max(height * self.GRID_Y_TOP, 195.0)
+        top_y = max(height * self.GRID_Y_TOP, 230.0)
         bottom_y = height * self.GRID_Y_BOTTOM
         xs = [geometry.left() + width * frac for frac in self.GRID_X]
         ys = [
@@ -152,7 +155,7 @@ class CalibrationWindow(QWidget):
         geometry = self.screen.geometry()
         width = float(geometry.width())
         height = float(geometry.height())
-        top_y = max(height * self.GRID_Y_TOP, 195.0)
+        top_y = max(height * self.GRID_Y_TOP, 230.0)
         bottom_y = height * self.GRID_Y_BOTTOM
         xs = [
             geometry.left() + width * frac for frac in self.VALIDATION_GRID_X
@@ -476,7 +479,9 @@ class CalibrationWindow(QWidget):
             self._fit_model()
 
         if self._face_found != face_before:
-            self.update(QRect(20, 148, 216, 38))
+            self.update(
+                self.FACE_PILL_RECT.toAlignedRect().adjusted(-4, -4, 4, 4)
+            )
             if self._phase == Phase.INTRO:
                 self.update(
                     QRect(
@@ -632,8 +637,8 @@ class CalibrationWindow(QWidget):
             painter.setBrush(GREEN if self._validating else BRAND)
             painter.drawRoundedRect(fill, 2, 2)
 
-        # Face status pill, under the preview.
-        pill = QRectF(24, 152, 208, 28)
+        # Face status pill, under the eye preview.
+        pill = QRectF(self.FACE_PILL_RECT)
         color = GREEN if self._face_found else RED
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(color.red(), color.green(), color.blue(), 24))
@@ -673,29 +678,58 @@ class CalibrationWindow(QWidget):
             )
 
     def _paint_preview(self, painter: QPainter) -> None:
-        rect = QRectF(24, 24, 208, 117)
+        rect = QRectF(self.PREVIEW_RECT)
         path = QPainterPath()
         path.addRoundedRect(rect, 14, 14)
         painter.save()
         painter.setClipPath(path)
         painter.fillRect(rect, QColor(4, 10, 18))
-        if self._preview is not None and not self._preview.isNull():
-            painter.drawImage(rect, self._preview)
+        main = (
+            self._eye_preview
+            if self._face_found
+            and self._eye_preview is not None
+            and not self._eye_preview.isNull()
+            else self._preview
+        )
+        if main is not None and not main.isNull():
+            painter.drawImage(rect, main)
         else:
             painter.setPen(MUTED)
             painter.setFont(QFont("Segoe UI", 9))
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "camera preview")
+
+        # Small whole-face inset so the user can still check framing.
+        if self._preview is not None and not self._preview.isNull():
+            inset = QRectF(rect.right() - 96, rect.bottom() - 58, 88, 50)
+            painter.fillRect(inset, QColor(4, 10, 18))
+            painter.drawImage(inset, self._preview)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(125, 211, 252, 90), 1))
+            painter.drawRect(inset)
+            painter.setPen(QColor(180, 210, 235, 180))
+            painter.setFont(QFont("Segoe UI", 6))
+            painter.drawText(
+                inset.adjusted(4, 0, -4, -2),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
+                "FACE",
+            )
         painter.restore()
+
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setPen(QPen(QColor(255, 255, 255, 26), 1))
         painter.drawRoundedRect(rect, 14, 14)
 
-        painter.setPen(QColor(180, 200, 220, 110))
+        painter.setPen(QColor(180, 200, 220, 130))
         painter.setFont(QFont("Segoe UI", 7))
+        has_eyes = (
+            self._face_found
+            and self._eye_preview is not None
+            and not self._eye_preview.isNull()
+        )
         painter.drawText(
-            rect.adjusted(10, 6, -8, -6),
+            rect.adjusted(10, 6, -100, -6),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
-            "CAMERA",
+            "EYES" if has_eyes else "CAMERA",
         )
 
     def _paint_points(self, painter: QPainter) -> None:
@@ -1022,4 +1056,8 @@ class CalibrationWindow(QWidget):
     # ----------------------------------------------------------------- preview
     def set_preview(self, image: QImage) -> None:
         self._preview = image
-        self.update(QRect(24, 24, 208, 117))
+        self.update(self.PREVIEW_RECT.toAlignedRect())
+
+    def set_eye_preview(self, image: QImage) -> None:
+        self._eye_preview = image
+        self.update(self.PREVIEW_RECT.toAlignedRect())
