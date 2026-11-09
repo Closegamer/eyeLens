@@ -1,48 +1,51 @@
 # eyeLens — Continue Session
 
-**Memory:** `plans/handoffs/HANDOFF_eyelens-head-pose_2026-11-09.md`
-**Status:** v0.7.0 implemented, tested and pushed. Nothing running. A fresh
-real-face recalibration is required to collect head pose and enable the pose
-correction.
+**Memory:** `plans/handoffs/HANDOFF_eyelens-stable-motion_2026-11-10.md`
+**Status:** v0.8.0 implemented, tested and pushed. The previous calibration was
+rejected; a fresh stable+motion recalibration is required.
 **Repo:** `https://github.com/Closegamer/eyeLens` (private, branch `main`)
-**Code commit:** `3586510` · tag `v0.7.0`
-**Chain:** `standalone-08a28c4a` seq 7
+**Code commit:** `302e6b2` · tag `v0.8.0`
+**Chain:** `standalone-08a28c4a` seq 8
 
-## What changed in v0.7.0
+## What changed in v0.8.0
 
-- MediaPipe now outputs the **6-DOF facial transformation matrix**. The tracker
-  extracts the face forward vector and head translation with every frame.
-- Calibration records head pose per sample. After the 9 validation points, a
-  global ridge **head-pose correction** is fitted on the primary residuals.
-- The correction is enabled only if it improves the held-out validation by at
-  least **3% and 5 px**; otherwise it is off and the eye-only model is used.
-- At runtime the pose correction changes with head position, recalculating the
-  mapping as the head moves.
-- New calibration files store `pose_samples`/`pose_alpha`/`pose_weight`; the
-  summary shows **head pose** when active.
-- Old calibrations without pose still load eye-only. **Recalibrate once** to
-  collect pose.
-- Version `0.7.0`.
+- **Real data showed the shuffled dot order was harmful**: several dots were
+  mislooked, validation error 262 px. The predictable **centre-out** order is
+  restored and settle time is 0.65 s.
+- **Each dot now has a stable part and a head-movement part**:
+  - first 0.65 s: hold still; frames train the base eye-only model;
+  - next 1.0 s: keep eyes on the dot and slowly move your head left/right;
+    frames train the head-pose correction.
+- The pose correction is fitted on motion frames (same target, varied pose),
+  stored as reusable coefficients, and enabled only if the combined stable+motion
+  validation improves by ≥5% and ≥10 px.
+- **Quality gate**: the result screen refuses Enter/Space unless the measured
+  error is ≤150 px; press R to retry. Bad calibrations cannot be saved.
+- The old v0.7 pose calibration has no usable motion correction record and is
+  **rejected**; eyeLens will ask for recalibration.
+- Calibration now takes about **80 seconds**. The active dot is larger/brighter.
+- Version `0.8.0`.
 
 ## What is next
 
-1. Restart eyeLens, recalibrate once, keep the head still during calibration.
-2. Check the result summary for **head pose**.
-3. Test moving the head slightly while looking at the same screen point.
-4. If pose correction is not selected but head movement still hurts, the next
-   step is a proper 3D gaze/head model (eye position + gaze ray intersection
-   with the screen plane), not a linear residual.
-5. If selected, tune `POSE_ALPHAS` / the 3%+5 px threshold.
-6. Denser grid and crop-based eye landmark inference remain options for the
-   base ~90–100 px error floor.
+1. Restart eyeLens (old calibration rejected), click **Calibrate**.
+2. For each dot: hold still first, then keep eyes on the dot and move your head
+   slowly left/right for the motion part.
+3. The result must be “Good” (≤150 px) to accept. Check whether the summary says
+   **head pose**.
+4. If still >150 px, try again; if repeated, next options: denser 6×6 grid,
+   explicit left-right/up-down motion, or a proper 3D gaze/head model.
+5. Real-face calibration and mouse-correction quality remain the acceptance
+   tests.
 
 ## Exact state
 
 - Virtualenv: `C:\a_REPOS\eyeLense\.venv` (Python 3.12).
-- Version: `0.7.0`.
-- Tests: 34 passed; ruff clean; smoke test exit 0; synthetic pose calibration E2E
-  passes; pose save/load test passes.
+- Version: `0.8.0`.
+- Tests: 34 passed; ruff clean; smoke test exit 0; synthetic calibration E2E
+  passes; synthetic pose-correction and save/load tests pass; old v0.7
+  calibration load is rejected.
 - `Modelfile` in the repo root is still an unrelated pre-existing file; leave it
   untracked.
-- This memory file and the v0.7 handoff are committed in the session commit
-  after `3586510`.
+- This memory file and the v0.8 handoff are committed in the session commit
+  after `302e6b2`.
