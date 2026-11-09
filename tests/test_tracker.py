@@ -1,0 +1,55 @@
+from __future__ import annotations
+
+import time
+
+import numpy as np
+
+from eyelens.gaze.features import FEATURE_NAMES
+from eyelens.gaze.tracker import EyeTracker, TrackerSnapshot
+
+
+def _snapshot(
+    seq: int,
+    timestamp: float,
+    values: np.ndarray | None,
+    openness: float = 0.3,
+) -> TrackerSnapshot:
+    return TrackerSnapshot(
+        seq=seq,
+        features=values,
+        openness=openness,
+        face_found=values is not None,
+        timestamp=timestamp,
+        fps=30.0,
+    )
+
+
+def test_recent_features_returns_median_of_open_frames() -> None:
+    tracker = EyeTracker(None)
+    now = time.monotonic()
+    for index in range(10):
+        values = np.zeros(len(FEATURE_NAMES))
+        values[0] = 0.4 + 0.02 * index
+        tracker._history.append(
+            _snapshot(index, now - 0.5 + 0.05 * index, values)
+        )
+    result = tracker.recent_features(seconds=1.0)
+    assert result is not None
+    assert result.shape == (len(FEATURE_NAMES),)
+    assert 0.44 < result[0] < 0.50
+
+
+def test_recent_features_rejects_blinks_and_missing_face() -> None:
+    tracker = EyeTracker(None)
+    now = time.monotonic()
+    values = np.zeros(len(FEATURE_NAMES))
+    for index in range(6):
+        tracker._history.append(
+            _snapshot(index, now - 0.2 + 0.01 * index, values, openness=0.01)
+        )
+    assert tracker.recent_features(seconds=1.0) is None
+
+    tracker._history.clear()
+    for index in range(6):
+        tracker._history.append(_snapshot(index, now - 0.2, None))
+    assert tracker.recent_features(seconds=1.0) is None

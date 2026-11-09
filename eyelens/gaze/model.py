@@ -37,6 +37,13 @@ _KRR_ALPHAS = np.logspace(-4.0, 1.0, 6)
 # Only use the kernel stage when it beats the polynomial by a meaningful
 # margin on held-out targets.
 _KRR_MIN_IMPROVEMENT = 0.99
+# Mouse-drag corrections are a local residual memory layered on top of the
+# fitted model.  A broad kernel would move unrelated screen regions; a narrow
+# one would only help at the exact corrected pixel.
+_CORRECTION_GAMMA = 0.06
+_CORRECTION_SIMILARITY = 0.70
+_CORRECTION_MIN_WEIGHT = 0.02
+_MAX_CORRECTIONS = 64
 
 
 @dataclass(frozen=True)
@@ -52,6 +59,7 @@ class CalibrationMetrics:
     krr_gamma: float = 0.0
     krr_alpha: float = 0.0
     krr_weight: float = 0.0
+    corrections: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -70,6 +78,7 @@ class CalibrationMetrics:
             krr_gamma=float(raw.get("krr_gamma", 0.0)),
             krr_alpha=float(raw.get("krr_alpha", 0.0)),
             krr_weight=float(raw.get("krr_weight", 0.0)),
+            corrections=int(raw.get("corrections", 0)),
         )
 
 
@@ -333,6 +342,8 @@ class GazeModel:
         krr_gamma: float = 0.0,
         krr_weight: float = 0.0,
         krr_residual_limit: float = 0.0,
+        correction_features: np.ndarray | None = None,
+        correction_offsets: np.ndarray | None = None,
         created_at: str | None = None,
     ) -> None:
         self.raw_mean = np.asarray(raw_mean, dtype=np.float64)
@@ -362,6 +373,24 @@ class GazeModel:
         self.krr_gamma = float(krr_gamma)
         self.krr_weight = float(krr_weight)
         self.krr_residual_limit = float(krr_residual_limit)
+        self.correction_features = (
+            np.asarray(correction_features, dtype=np.float64)
+            if correction_features is not None
+            else np.zeros((0, len(FEATURE_NAMES)))
+        )
+        self.correction_offsets = (
+            np.asarray(correction_offsets, dtype=np.float64)
+            if correction_offsets is not None
+            else np.zeros((0, 2))
+        )
+        if self.correction_features.size:
+            self._correction_scaled = (
+                self.correction_features - self.raw_mean
+            ) / self.raw_std
+        else:
+            self._correction_scaled = np.zeros(
+                (0, len(FEATURE_NAMES)), dtype=np.float64
+            )
         self.created_at = created_at or time.strftime("%Y-%m-%dT%H:%M:%S")
 
     # ------------------------------------------------------------------ fit
@@ -375,6 +404,9 @@ class GazeModel:
         screen: dict[str, Any],
         validation_rmse: float = 0.0,
         validation_points: int = 0,
+        corrections: int = 0,
+        correction_features: np.ndarray | None = None,
+        correction_offsets: np.ndarray | None = None,
     ) -> GazeModel:
         samples = np.asarray(samples, dtype=np.float64)
         targets = np.asarray(targets, dtype=np.float64)
@@ -467,6 +499,7 @@ class GazeModel:
             krr_gamma=float(krr_gamma) if krr_weight > 0 else 0.0,
             krr_alpha=float(krr_alpha) if krr_weight > 0 else 0.0,
             krr_weight=float(krr_weight),
+            corrections=int(corrections),
         )
         return cls(
             raw_mean=raw_mean,
@@ -488,14 +521,15 @@ class GazeModel:
             krr_gamma=krr_gamma,
             krr_weight=krr_weight,
             krr_residual_limit=krr_residual_limit,
+            correction_features=correction_features,
+            correction_offsets=correction_offsets,
         )
 
     # -------------------------------------------------------------- predict
-    def predict(self, values: np.ndarray) -> GazePrediction:
-        raw = np.asarray(values, dtype=np.float64).reshape(-1)
-        if raw.size != len(FEATURE_NAMES):
-            raise ValueError(f"expected {len(FEATURE_NAMES)} features")
-        raw = np.clip(raw, self.clip_low, self.clip_high)
+    def _predict_base(
+        self, raw: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Polynomial + kernel prediction before mouse corrections."""
         raw_scaled = (raw - self.raw_mean) / self.raw_std
         scaled = (expand_features(raw) - self.mean) / self.std
         out = scaled @ self.coef + self.intercept
@@ -511,7 +545,121 @@ class GazeModel:
                     self.krr_residual_limit,
                 )
             out = out + self.krr_weight * residual
+        return out, raw_scaled
+
+    def _correction_offset(self, raw_scaled: np.ndarray) -> np.ndarray:
+        if not self._correction_scaled.size:
+            return np.zeros(2, dtype=np.float64)
+        distance_sq = np.sum(
+            np.square(self._correction_scaled - raw_scaled), axis=1
+        )
+        weights = np.exp(-_CORRECTION_GAMMA * distance_sq)
+        # Squaring the kernel and dropping negligible weights makes the
+        # nearest correction dominate instead of being diluted by many
+        # unrelated corrections elsewhere on the screen.
+        weights = np.where(
+            weights >= _CORRECTION_MIN_WEIGHT, weights * weights, 0.0
+        )
+        total = float(np.sum(weights))
+        if total < 1e-9:
+            return np.zeros(2, dtype=np.float64)
+        return (weights @ self.correction_offsets) / total
+
+    def predict(self, values: np.ndarray) -> GazePrediction:
+        raw = np.asarray(values, dtype=np.float64).reshape(-1)
+        if raw.size != len(FEATURE_NAMES):
+            raise ValueError(f"expected {len(FEATURE_NAMES)} features")
+        raw = np.clip(raw, self.clip_low, self.clip_high)
+        out, raw_scaled = self._predict_base(raw)
+        out = out + self._correction_offset(raw_scaled)
         return GazePrediction(float(out[0]), float(out[1]))
+
+    # ------------------------------------------------------ mouse correction
+    def with_correction(
+        self, features: np.ndarray, target: tuple[float, float]
+    ) -> GazeModel:
+        """Return a new model with a mouse-drag correction added.
+
+        Corrections are a small local residual memory on top of the fitted
+        model: each drag stores ``target - base_prediction`` at the gaze
+        features where the user released the lens.  Prediction blends nearby
+        corrections with an RBF weight, so the correction is applied where the
+        user made it and decays away from that region.
+
+        This is O(number of corrections) work, not a full refit, so it feels
+        immediate.  A correction near an older one replaces the older one
+        rather than compounding.
+        """
+        raw = np.asarray(features, dtype=np.float64).reshape(-1)
+        if raw.size != len(FEATURE_NAMES):
+            raise ValueError("correction features have the wrong shape")
+        if not np.all(np.isfinite(raw)):
+            raise ValueError("correction features contain non-finite values")
+        target_values = np.asarray(target, dtype=np.float64).reshape(-1)
+        if target_values.size != 2 or not np.all(np.isfinite(target_values)):
+            raise ValueError("correction target has the wrong shape")
+
+        clip_low = np.minimum(self.clip_low, raw)
+        clip_high = np.maximum(self.clip_high, raw)
+        raw = np.clip(raw, clip_low, clip_high)
+        base, raw_scaled = self._predict_base(raw)
+        offset = target_values - base
+
+        kept_features = self.correction_features
+        kept_offsets = self.correction_offsets
+        if self._correction_scaled.size:
+            distance_sq = np.sum(
+                np.square(self._correction_scaled - raw_scaled), axis=1
+            )
+            similarity = np.exp(-_CORRECTION_GAMMA * distance_sq)
+            keep = similarity < _CORRECTION_SIMILARITY
+            kept_features = self.correction_features[keep]
+            kept_offsets = self.correction_offsets[keep]
+
+        correction_features = np.vstack([kept_features, raw.reshape(1, -1)])
+        correction_offsets = np.vstack([kept_offsets, offset.reshape(1, -1)])
+        if correction_features.shape[0] > _MAX_CORRECTIONS:
+            correction_features = correction_features[-_MAX_CORRECTIONS:]
+            correction_offsets = correction_offsets[-_MAX_CORRECTIONS:]
+
+        metrics = CalibrationMetrics(
+            train_rmse=self.metrics.train_rmse,
+            loo_rmse=self.metrics.loo_rmse,
+            n_points=self.metrics.n_points,
+            n_samples=self.metrics.n_samples,
+            alpha=self.metrics.alpha,
+            worst_point_rmse=self.metrics.worst_point_rmse,
+            validation_rmse=self.metrics.validation_rmse,
+            validation_points=self.metrics.validation_points,
+            krr_gamma=self.metrics.krr_gamma,
+            krr_alpha=self.metrics.krr_alpha,
+            krr_weight=self.metrics.krr_weight,
+            corrections=self.metrics.corrections + 1,
+        )
+        return GazeModel(
+            raw_mean=self.raw_mean,
+            raw_std=self.raw_std,
+            mean=self.mean,
+            std=self.std,
+            coef=self.coef,
+            intercept=self.intercept,
+            clip_low=clip_low,
+            clip_high=clip_high,
+            openness_threshold=self.openness_threshold,
+            screen=self.screen,
+            metrics=metrics,
+            samples=self.samples,
+            targets=self.targets,
+            point_ids=self.point_ids,
+            krr_train=self.krr_train,
+            krr_coef=self.krr_coef,
+            krr_gamma=self.krr_gamma,
+            krr_weight=self.krr_weight,
+            krr_residual_limit=self.krr_residual_limit,
+            correction_features=correction_features,
+            correction_offsets=correction_offsets,
+            created_at=self.created_at,
+        )
 
     def is_eye_open(self, openness: float) -> bool:
         return float(openness) >= self.openness_threshold
@@ -540,7 +688,11 @@ class GazeModel:
         return self.error_rmse <= 150.0
 
     def summary(self) -> str:
-        return f"{self.quality_label} · ±{self.error_rmse:.0f} px"
+        text = f"{self.quality_label} · ±{self.error_rmse:.0f} px"
+        if self.metrics.corrections:
+            count = self.metrics.corrections
+            text += f" · {count} {'fix' if count == 1 else 'fixes'}"
+        return text
 
     # ------------------------------------------------------------------- io
     def to_dict(self) -> dict[str, Any]:
@@ -554,6 +706,14 @@ class GazeModel:
             "samples": self.samples.tolist(),
             "targets": self.targets.tolist(),
             "point_ids": self.point_ids.tolist(),
+            "corrections": [
+                {"features": features.tolist(), "offset": offset.tolist()}
+                for features, offset in zip(
+                    self.correction_features,
+                    self.correction_offsets,
+                    strict=True,
+                )
+            ],
         }
 
     def save(self, path: Path) -> None:
@@ -595,6 +755,29 @@ class GazeModel:
                 if isinstance(metrics, dict)
                 else 0
             )
+            corrections = (
+                int(metrics.get("corrections", 0))
+                if isinstance(metrics, dict)
+                else 0
+            )
+            correction_items = raw.get("corrections", [])
+            correction_features = None
+            correction_offsets = None
+            if isinstance(correction_items, list) and correction_items:
+                correction_features = np.asarray(
+                    [item["features"] for item in correction_items],
+                    dtype=np.float64,
+                )
+                correction_offsets = np.asarray(
+                    [item["offset"] for item in correction_items],
+                    dtype=np.float64,
+                )
+                if (
+                    correction_features.ndim != 2
+                    or correction_features.shape[1] != len(FEATURE_NAMES)
+                    or correction_offsets.shape != (correction_features.shape[0], 2)
+                ):
+                    raise ValueError("saved corrections have the wrong shape")
             model = cls.fit(
                 samples=samples,
                 targets=targets,
@@ -603,6 +786,9 @@ class GazeModel:
                 screen=dict(raw.get("screen", {})),
                 validation_rmse=validation,
                 validation_points=validation_points,
+                corrections=corrections,
+                correction_features=correction_features,
+                correction_offsets=correction_offsets,
             )
             model.created_at = str(raw.get("created_at", model.created_at))
             return model

@@ -55,6 +55,7 @@ class StatusInfo:
     calibration_detail: str = "Calibrate once before using the lens."
     calibration_level: str = "bad"
     can_calibrate: bool = False
+    can_correct: bool = False
     lens_visible: bool = True
     locked: bool = False
     demo: bool = False
@@ -179,6 +180,7 @@ class SettingsWindow(QWidget):
     settings_changed = Signal()
     calibrate_requested = Signal()
     freeze_requested = Signal()
+    correct_requested = Signal()
     camera_restart_requested = Signal(int)
     quit_requested = Signal()
     hidden_to_tray = Signal()
@@ -245,7 +247,7 @@ class SettingsWindow(QWidget):
         titles.addWidget(title)
         titles.addWidget(subtitle)
         header.addLayout(titles, 1)
-        version = QLabel("v0.2")
+        version = QLabel("v0.3")
         version.setObjectName("badge")
         header.addWidget(version, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(header)
@@ -294,6 +296,14 @@ class SettingsWindow(QWidget):
         )
         self.freeze_button.toggled.connect(self._toggle_freeze)
         lens_header.addWidget(self.freeze_button)
+        self.correct_button = QPushButton("Fix position")
+        self.correct_button.setObjectName("ghost")
+        self.correct_button.setToolTip(
+            "Drag the lens to where you are looking and release; the model "
+            "learns that correction (Ctrl+Alt+D)."
+        )
+        self.correct_button.clicked.connect(self.correct_requested.emit)
+        lens_header.addWidget(self.correct_button)
         self.show_lens = QCheckBox("Show lens")
         self.show_lens.toggled.connect(self._toggle_lens_visible)
         lens_header.addWidget(self.show_lens)
@@ -364,7 +374,9 @@ class SettingsWindow(QWidget):
         self.calibration_help = QLabel(
             "Look at 25 dots, then 9 accuracy-check dots (about 50 seconds). "
             "eyeLens learns how your eyes map to this screen and reports the "
-            "error it measured. Your camera feed never leaves this computer."
+            "error it measured. If the lens sits off target later, press "
+            "Ctrl+Alt+D and drag the handle to where you are looking. Your "
+            "camera feed never leaves this computer."
         )
         self.calibration_help.setObjectName("muted")
         self.calibration_help.setWordWrap(True)
@@ -408,6 +420,7 @@ class SettingsWindow(QWidget):
             ("Ctrl + Alt + L", "Show / hide the lens"),
             ("Ctrl + Alt + F", "Freeze / unfreeze"),
             ("Ctrl + Alt + C", "Calibrate"),
+            ("Ctrl + Alt + D", "Correct / drag the lens"),
             ("Ctrl + Alt + = / -", "Zoom in / out"),
             ("Ctrl + Alt + ] / [", "Grow / shrink lens"),
         ]
@@ -686,6 +699,7 @@ class SettingsWindow(QWidget):
         )
         self.detail_label.setText(info.calibration_detail)
         self.calibrate_button.setEnabled(info.can_calibrate)
+        self.correct_button.setEnabled(info.can_correct)
         self.calibrate_button.setText(
             "Recalibrate" if info.calibration_text != "Not calibrated" else "Calibrate now"
         )

@@ -26,6 +26,9 @@ to read, then unfreeze it and continue working.
 - **Smooth and stable** — adaptive 1€ filtering, blink rejection, and a short
   hold when tracking is temporarily lost.
 - **Freeze mode** — lock the lens in place for comfortable reading.
+- **Mouse correction** — if the lens sits off target, press `Ctrl+Alt+D`,
+  drag the small handle to where you are looking, and release. The model
+  learns that local correction immediately.
 - **Truly click-through** — the overlay uses `WS_EX_TRANSPARENT`; clicks, scrolls,
   and keyboard input go to the app underneath.
 - **No self-reflection** — the lens is excluded from its own screen capture
@@ -82,7 +85,12 @@ In demo mode the lens follows the mouse pointer instead of your eyes.
 
 Calibration is personal and tied to the current screen geometry. Recalibrate if
 you move the camera, change the display resolution or scaling, or notice the
-lens drifting.
+lens drifting everywhere.
+
+If the lens is accurate overall but slightly off in specific spots, you do not
+need to recalibrate: press `Ctrl+Alt+D`, drag the lens to where you are looking,
+and release. Repeat for other regions. Corrections are saved with the
+calibration.
 
 ![eyeLens calibration](docs/calibration.png)
 
@@ -93,6 +101,7 @@ lens drifting.
 | `Ctrl + Alt + L` | Show / hide the lens |
 | `Ctrl + Alt + F` | Freeze / unfreeze the lens position |
 | `Ctrl + Alt + C` | Start calibration |
+| `Ctrl + Alt + D` | Correct / drag the lens position |
 | `Ctrl + Alt + =` / `Ctrl + Alt + -` | Zoom in / out |
 | `Ctrl + Alt + ]` / `Ctrl + Alt + [` | Grow / shrink the lens |
 
@@ -105,6 +114,8 @@ Everything is also available from the tray icon and the settings window:
 - **Opacity** — how strongly the lens covers the content underneath.
 - **Outline / On-screen HUD** — visual chrome and the small zoom/size badge.
 - **Freeze** — keeps the lens where it is while your eyes move.
+- **Fix position** — turns the lens into a draggable handle; drop it where you
+  are looking and the model learns that correction. Also `Ctrl+Alt+D`.
 - **Camera** — choose a different webcam index and apply it. Changing the camera
   usually requires recalibrating for best accuracy.
 
@@ -136,6 +147,11 @@ A few implementation details that matter:
   is only enabled when grouped cross-validation says it helps.
 - The 9 accuracy-check points are never used to fit the primary model, so the
   error shown on the result screen is a real held-out measurement.
+- Mouse corrections are a local residual memory on top of the fitted model:
+  each drag stores the difference between the drop point and the model's
+  prediction at the current gaze features. Nearby corrections blend with an RBF
+  weight, so a fix applies where you made it and decays elsewhere. No full
+  recalibration is needed.
 - Runtime predictions are clipped to the calibrated feature range, and the
   kernel residual is bounded, preventing a bad frame from throwing the lens
   across the screen.
@@ -170,6 +186,11 @@ move closer to the camera, and make sure the correct camera is selected.
 Recalibrate. Keep your head still during calibration and look at the centre of
 each dot. Increase **Smoothing** if the lens jitters or moves too quickly;
 decrease it if it feels sluggish.
+
+**The lens is still slightly off in one area.**
+Press `Ctrl+Alt+D`, drag the small handle to where you are actually looking,
+and release. eyeLens stores a local correction and keeps it. Repeat in other
+screen regions if needed. Recalibrate to discard all corrections and start over.
 
 **The lens shows a mirror image of itself.**
 This should not happen on Windows 10 2004+ / Windows 11. If you see a warning in
@@ -232,6 +253,7 @@ eyelens/
 └── ui/
     ├── overlay.py            click-through always-on-top lens
     ├── calibration_window.py full-screen calibration flow
+    ├── correction_handle.py small draggable mouse-correction handle
     ├── settings_window.py    settings, status, camera preview
     └── icon.py               programmatic app icon
 ```

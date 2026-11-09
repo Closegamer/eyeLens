@@ -8,6 +8,7 @@ import ctypes
 import os
 import platform
 import sys
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QTimer
@@ -58,6 +59,9 @@ class EyeLensApp(QObject):
         self._tray_notice_shown = False
         self._calibration_invalid = False
         self._screen_change_pending = False
+        self._correction_target: tuple[float, float] | None = None
+        self._correction_release_at = 0.0
+        self._correction_pending = False
 
         self.settings = Settings.load()
         self.screen = QGuiApplication.primaryScreen()
@@ -83,6 +87,8 @@ class EyeLensApp(QObject):
             self.screen, self.engine, self.capture, self.settings, parent=None
         )
         self.overlay.screen_changed.connect(self._schedule_screen_change)
+        self.overlay.correction_committed.connect(self._on_correction_committed)
+        self.overlay.correction_cancelled.connect(self._on_correction_cancelled)
         self.settings_window = SettingsWindow(
             self.settings, tracker=self.tracker, engine=self.engine
         )
@@ -91,6 +97,7 @@ class EyeLensApp(QObject):
         self.settings_window.calibrate_requested.connect(self.start_calibration)
         self.settings_window.freeze_requested.connect(self.toggle_freeze)
         self.settings_window.camera_restart_requested.connect(self._restart_camera)
+        self.settings_window.correct_requested.connect(self.correct_lens)
         self.settings_window.quit_requested.connect(self.quit)
         self.settings_window.hidden_to_tray.connect(self._on_hidden_to_tray)
 
@@ -102,12 +109,17 @@ class EyeLensApp(QObject):
         self._screen_timer.setSingleShot(True)
         self._screen_timer.setInterval(350)
         self._screen_timer.timeout.connect(self._handle_screen_change)
+        self._correction_timer = QTimer(self)
+        self._correction_timer.setSingleShot(True)
+        self._correction_timer.setInterval(650)
+        self._correction_timer.timeout.connect(self._learn_correction)
 
         self._build_tray()
         self._hotkeys = HotkeyManager(self)
         self._hotkeys.toggle_lens.connect(self.toggle_lens)
         self._hotkeys.toggle_freeze.connect(self.toggle_freeze)
         self._hotkeys.calibrate.connect(self.start_calibration)
+        self._hotkeys.correct_lens.connect(self.correct_lens)
         self._hotkeys.zoom_in.connect(lambda: self.adjust_zoom(0.25))
         self._hotkeys.zoom_out.connect(lambda: self.adjust_zoom(-0.25))
         self._hotkeys.size_up.connect(lambda: self.adjust_size(20))
@@ -190,6 +202,10 @@ class EyeLensApp(QObject):
         self._tray_freeze.setCheckable(True)
         self._tray_freeze.triggered.connect(self.toggle_freeze)
         menu.addAction(self._tray_freeze)
+
+        self._tray_correct = QAction("Correct lens position…", menu)
+        self._tray_correct.triggered.connect(self.correct_lens)
+        menu.addAction(self._tray_correct)
         menu.addSeparator()
 
         self._tray_zoom_in = QAction("Zoom in", menu)
@@ -239,6 +255,7 @@ class EyeLensApp(QObject):
                 "to use eye tracking."
             )
             info.can_calibrate = False
+            info.can_correct = False
             return info
 
         tracker = self.tracker
@@ -276,8 +293,13 @@ class EyeLensApp(QObject):
             info.calibration_level = (
                 "ok" if self.model.quality_ok else "warn"
             )
+            label = (
+                "Initial accuracy"
+                if self.model.metrics.corrections
+                else "Accuracy"
+            )
             detail = (
-                f"Accuracy ±{self.model.error_rmse:.0f} px · "
+                f"{label} ±{self.model.error_rmse:.0f} px · "
                 f"{self.model.metrics.n_points} points · "
                 f"{self.model.metrics.n_samples} samples."
             )
@@ -296,6 +318,7 @@ class EyeLensApp(QObject):
                 and tracker.is_ready
                 and not tracker.error_text
             )
+            info.can_correct = info.can_calibrate
         else:
             info.calibration_text = "Not calibrated"
             info.calibration_level = "bad"
@@ -317,6 +340,7 @@ class EyeLensApp(QObject):
                 and tracker.is_ready
                 and not tracker.error_text
             )
+            info.can_correct = False
         return info
 
     def _sync_tray_menu(self) -> None:
@@ -329,6 +353,7 @@ class EyeLensApp(QObject):
         self._tray_show_lens.setChecked(self.settings.lens_visible)
         self._tray_freeze.setChecked(self.overlay.locked)
         available = self.demo or self.model is not None
+        self._tray_correct.setEnabled(info.can_correct)
         self._tray_zoom_in.setEnabled(available)
         self._tray_zoom_out.setEnabled(available)
         self._tray_size_up.setEnabled(available)
@@ -340,6 +365,8 @@ class EyeLensApp(QObject):
     # -------------------------------------------------------------- settings
     def _on_settings_changed(self) -> None:
         self.settings.normalized()
+        if not self.settings.lens_visible and self.overlay.correction_active:
+            self.overlay.cancel_correction()
         self.engine.apply_settings(self.settings)
         self.overlay.apply_settings(self.settings)
         self._save_timer.start()
@@ -371,6 +398,8 @@ class EyeLensApp(QObject):
             self._notify("Calibrate first", "Calibrate eyeLens before showing the lens.")
             return
         self.settings.lens_visible = not self.settings.lens_visible
+        if not self.settings.lens_visible and self.overlay.correction_active:
+            self.overlay.cancel_correction()
         if self.settings.lens_visible:
             if not self.overlay.isVisible():
                 self.overlay.show()
@@ -390,6 +419,118 @@ class EyeLensApp(QObject):
         self.overlay.toggle_locked()
         self.settings_window.set_locked(self.overlay.locked)
         self._sync_tray_menu()
+
+    # --------------------------------------------------- mouse correction
+    def correct_lens(self) -> None:
+        """Let the user drag the lens to the right spot; the model learns it."""
+        if self.demo:
+            self._notify("Demo mode", "Correction is unavailable in mouse demo mode.")
+            return
+        if self.model is None:
+            self._notify("Calibrate first", "Calibrate eyeLens before correcting it.")
+            return
+        if self.calibration_window is not None:
+            self._notify(
+                "Calibration running",
+                "Finish the current calibration before correcting the lens.",
+            )
+            return
+        if self.overlay.correction_active:
+            self.overlay.cancel_correction()
+            return
+        if self._correction_pending:
+            self._notify(
+                "Still learning",
+                "Wait a moment for the previous correction to finish.",
+            )
+            return
+        if self.tracker is None or not self.tracker.isRunning():
+            self._notify("Camera unavailable", "The camera is not running.")
+            return
+        if not self.tracker.is_ready:
+            self._notify(
+                "Camera starting", "Wait a moment for the camera, then try again."
+            )
+            return
+        if self.tracker.error_text:
+            self._notify("Camera error", self.tracker.error_text, warning=True)
+            return
+        if not self.settings.lens_visible:
+            self.settings.lens_visible = True
+            self.engine.apply_settings(self.settings)
+            self.overlay.apply_settings(self.settings)
+            self.settings_window.sync_from_settings()
+            self._save_timer.start()
+            self._sync_tray_menu()
+        if not self.overlay.begin_correction():
+            self._notify("Correction unavailable", "The lens is busy.")
+            return
+        self._notify(
+            "Correct lens position",
+            "Drag the handle to where you are looking, then release. "
+            "The lens learns that spot.",
+        )
+
+    def _on_correction_committed(self, x: float, y: float) -> None:
+        if self._quitting:
+            return
+        if self.model is None or self.tracker is None:
+            self.overlay.finish_correction(False)
+            return
+        self._correction_target = (float(x), float(y))
+        self._correction_release_at = time.monotonic()
+        self._correction_pending = True
+        self._correction_timer.start()
+
+    def _on_correction_cancelled(self) -> None:
+        self._correction_timer.stop()
+        self._correction_pending = False
+        self._correction_target = None
+        self.settings_window.refresh_status()
+
+    def _learn_correction(self) -> None:
+        self._correction_timer.stop()
+        if self._quitting or not self._correction_pending:
+            return
+        self._correction_pending = False
+        target = self._correction_target
+        self._correction_target = None
+        if target is None or self.model is None or self.tracker is None:
+            self.overlay.finish_correction(False)
+            return
+        features = self.tracker.recent_features(
+            seconds=0.5, since=self._correction_release_at
+        )
+        if features is None:
+            self.overlay.finish_correction(False)
+            self._notify(
+                "Correction not learned",
+                "Keep your face visible and your eyes on the lens, then try again.",
+                warning=True,
+            )
+            return
+        try:
+            new_model = self.model.with_correction(features, target)
+        except (ValueError, FloatingPointError) as exc:
+            print(f"eyeLens: correction failed: {exc}", file=sys.stderr)
+            self.overlay.finish_correction(False)
+            self._notify("Correction failed", str(exc), warning=True)
+            return
+        self.model = new_model
+        self.engine.set_model(new_model, reset=False)
+        self.engine.recenter(target[0], target[1])
+        try:
+            new_model.save(calibration_path())
+        except OSError as exc:
+            print(f"eyeLens: could not save correction: {exc}", file=sys.stderr)
+            self._notify("Could not save correction", str(exc), warning=True)
+        self.overlay.finish_correction(True)
+        self.settings_window.refresh_status()
+        self._sync_tray_menu()
+        self._notify(
+            "Correction learned",
+            "The lens learned this spot. Press Ctrl+Alt+D again for another area.",
+        )
 
     def adjust_zoom(self, delta: float) -> None:
         if not self.demo and self.model is None:
@@ -530,6 +671,8 @@ class EyeLensApp(QObject):
     def _restart_camera(self, index: int) -> None:
         if self.demo:
             return
+        if self.overlay.correction_active:
+            self.overlay.cancel_correction()
         index = max(0, min(9, int(index)))
         self.settings.camera_index = index
         self._save_settings()
@@ -651,6 +794,11 @@ class EyeLensApp(QObject):
         self._quitting = True
         self._save_timer.stop()
         self._screen_timer.stop()
+        self._correction_timer.stop()
+        self._correction_pending = False
+        self._correction_target = None
+        if self.overlay.correction_active:
+            self.overlay.cancel_correction()
         self._save_settings()
         with contextlib.suppress(Exception):
             self._hotkeys.stop()

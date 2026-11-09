@@ -56,17 +56,25 @@ class GazeEngine(QObject):
         self._timer.start()
 
     # ----------------------------------------------------------------- config
-    def set_model(self, model: GazeModel | None) -> None:
+    def set_model(self, model: GazeModel | None, reset: bool = True) -> None:
         self.model = model
-        self._filter.reset()
-        self._current = None
-        self._last_good = 0.0
-        self._last_seq = -1
+        if reset:
+            self._filter.reset()
+            self._current = None
+            self._last_good = 0.0
+            self._last_seq = -1
 
     def apply_settings(self, settings: Settings) -> None:
         self.settings = settings
         cutoff, beta = smoothing_to_cutoff(settings.smoothing)
         self._filter.configure(cutoff, beta)
+
+    def recenter(self, x: float, y: float) -> None:
+        """Start the filter at a known point after a mouse correction."""
+        point = (float(x), float(y))
+        self._filter.reset(point)
+        self._current = point
+        self._last_good = time.monotonic()
 
     # ------------------------------------------------------------------- poll
     def poll(self) -> None:

@@ -6,6 +6,7 @@ import contextlib
 import threading
 import time
 import traceback
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,6 +56,7 @@ class EyeTracker(QThread):
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._snapshot = TrackerSnapshot(0, None, 0.0, False, 0.0, 0.0)
+        self._history: deque[TrackerSnapshot] = deque(maxlen=120)
         self._preview_requests = 0
         self._status = "Camera stopped"
         self._error = ""
@@ -99,6 +101,42 @@ class EyeTracker(QThread):
         with self._lock:
             return self._snapshot
 
+    def recent_features(
+        self, seconds: float = 0.5, since: float | None = None
+    ) -> np.ndarray | None:
+        """Robust median eye features from the last part of a fixation.
+
+        Used by the mouse-drag correction: after the user releases the lens we
+        wait a short moment, then take the recent frames where the face was
+        visible and the eyes were open.  Per-feature MAD rejection removes
+        blinks and single-frame landmark glitches.
+        """
+        cutoff = time.monotonic() - max(0.05, float(seconds))
+        if since is not None:
+            cutoff = max(cutoff, float(since))
+        with self._lock:
+            history = list(self._history)
+        rows = [
+            snap.features
+            for snap in history
+            if snap.timestamp >= cutoff
+            and snap.face_found
+            and snap.features is not None
+            and snap.openness >= 0.05
+        ]
+        if len(rows) < 3:
+            return None
+        matrix = np.vstack(rows)
+        median = np.median(matrix, axis=0)
+        mad = np.median(np.abs(matrix - median), axis=0) * 1.4826
+        valid = mad > 1e-6
+        if np.any(valid):
+            deviation = np.abs(matrix[:, valid] - median[valid])
+            keep = np.max(deviation / mad[valid], axis=1) <= 3.5
+            if int(np.count_nonzero(keep)) >= 3:
+                matrix = matrix[keep]
+        return np.median(matrix, axis=0)
+
     def _set_status(self, text: str) -> None:
         with self._lock:
             changed = text != self._status
@@ -109,6 +147,7 @@ class EyeTracker(QThread):
     def _set_snapshot(self, snapshot: TrackerSnapshot) -> None:
         with self._lock:
             self._snapshot = snapshot
+            self._history.append(snapshot)
 
     # -------------------------------------------------------------------- run
     def run(self) -> None:
@@ -227,7 +266,9 @@ class EyeTracker(QThread):
                         features=features.values if features else None,
                         openness=features.openness if features else 0.0,
                         face_found=face_found,
-                        timestamp=now,
+                        # recent_features() and the correction hold use the
+                        # monotonic clock, not perf_counter.
+                        timestamp=time.monotonic(),
                         fps=fps,
                     )
                 )

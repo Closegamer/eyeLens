@@ -143,6 +143,41 @@ def test_hybrid_uses_kernel_stage_for_nonlinear_mapping() -> None:
     assert model.metrics.loo_rmse < 40.0
 
 
+def test_mouse_correction_moves_prediction_and_persists(tmp_path) -> None:
+    samples, targets, point_ids = make_dataset()
+    model = GazeModel.fit(samples, targets, point_ids, 0.12, SCREEN.to_dict())
+    feature = samples[100].copy()
+    before = model.predict(feature)
+    target = (before.x + 180.0, before.y - 120.0)
+
+    corrected = model.with_correction(feature, target)
+    after = corrected.predict(feature)
+    assert corrected.metrics.corrections == 1
+    assert len(corrected.correction_features) == 1
+    assert abs(after.x - target[0]) < 2.0
+    assert abs(after.y - target[1]) < 2.0
+
+    # A correction in the same feature region replaces the old one instead of
+    # compounding into an overshoot.
+    target2 = (target[0] - 60.0, target[1] + 30.0)
+    corrected2 = corrected.with_correction(feature, target2)
+    after2 = corrected2.predict(feature)
+    assert corrected2.metrics.corrections == 2
+    assert len(corrected2.correction_features) == 1
+    assert abs(after2.x - target2[0]) < 2.0
+    assert abs(after2.y - target2[1]) < 2.0
+
+    path = tmp_path / "corrected.json"
+    corrected2.save(path)
+    loaded = GazeModel.load(path)
+    assert loaded is not None
+    assert loaded.metrics.corrections == 2
+    assert len(loaded.correction_features) == 1
+    restored = loaded.predict(feature)
+    assert abs(restored.x - target2[0]) < 2.0
+    assert abs(restored.y - target2[1]) < 2.0
+
+
 def test_save_and_load_roundtrip(tmp_path) -> None:
     samples, targets, point_ids = make_dataset()
     model = GazeModel.fit(

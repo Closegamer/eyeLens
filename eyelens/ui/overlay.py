@@ -26,6 +26,7 @@ from PySide6.QtWidgets import QWidget
 from ..capture import ScreenCapture, source_extent
 from ..config import ScreenInfo, Settings
 from ..gaze.engine import GazeEngine
+from .correction_handle import CorrectionHandle
 
 
 def screen_info(screen: QScreen) -> ScreenInfo:
@@ -42,6 +43,9 @@ def screen_info(screen: QScreen) -> ScreenInfo:
 
 class LensOverlay(QWidget):
     screen_changed = Signal()
+    correction_started = Signal()
+    correction_committed = Signal(float, float)
+    correction_cancelled = Signal()
 
     SHADOW = 26.0
 
@@ -71,6 +75,9 @@ class LensOverlay(QWidget):
         self._osd_until = 0.0
         self._osd_started = 0.0
         self._check_native_on_next_show = True
+        self._correcting = False
+        self._correction_hold = False
+        self._handle: CorrectionHandle | None = None
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -136,6 +143,108 @@ class LensOverlay(QWidget):
     def current_diameter(self) -> int:
         return self._settings.diameter
 
+    # ------------------------------------------------------- mouse correction
+    @property
+    def correction_active(self) -> bool:
+        return self._correcting or self._correction_hold
+
+    def begin_correction(self) -> bool:
+        """Make the lens draggable with a small on-screen handle."""
+        if self.correction_active:
+            return False
+        self._correcting = True
+        self._has_gaze = True
+        if not self.isVisible():
+            self.show()
+        self.raise_()
+        if self._handle is None:
+            self._handle = CorrectionHandle()
+            self._handle.moved.connect(self._on_handle_moved)
+            self._handle.released.connect(self._on_handle_released)
+            self._handle.cancelled.connect(self._cancel_from_handle)
+        self._handle.set_center(self._global_center())
+        self._handle.show()
+        self._handle.raise_()
+        self.flash_osd("Drag the handle to where you are looking", duration=4.0)
+        self.correction_started.emit()
+        return True
+
+    def cancel_correction(self) -> bool:
+        if not self.correction_active:
+            return False
+        self._correcting = False
+        self._correction_hold = False
+        if self._handle is not None:
+            self._handle.hide()
+        self.flash_osd("Correction cancelled")
+        self.correction_cancelled.emit()
+        return True
+
+    def finish_correction(self, success: bool) -> None:
+        self._correcting = False
+        self._correction_hold = False
+        self._has_gaze = True
+        if self._handle is not None:
+            self._handle.hide()
+        self.flash_osd(
+            "Correction learned" if success else "Correction not learned",
+            duration=1.8 if success else 2.2,
+        )
+
+    def _global_center(self) -> QPointF:
+        origin = self.screen.geometry().topLeft()
+        return QPointF(
+            origin.x() + self._display_center.x(),
+            origin.y() + self._display_center.y(),
+        )
+
+    def _clamp_center(self, center: QPointF, diameter: float) -> QPointF:
+        radius = diameter / 2.0
+        width = float(self.screen.geometry().width())
+        height = float(self.screen.geometry().height())
+        x = (
+            width / 2.0
+            if diameter >= width
+            else min(max(center.x(), radius), width - radius)
+        )
+        y = (
+            height / 2.0
+            if diameter >= height
+            else min(max(center.y(), radius), height - radius)
+        )
+        return QPointF(x, y)
+
+    def _on_handle_moved(self, global_center: QPointF) -> None:
+        if not self._correcting:
+            return
+        origin = self.screen.geometry().topLeft()
+        local = QPointF(
+            global_center.x() - origin.x(),
+            global_center.y() - origin.y(),
+        )
+        self._display_center = self._clamp_center(
+            local, self._display_diameter
+        )
+        self._has_gaze = True
+        self._last_paint_state = None
+        self._update_paint()
+        if self._handle is not None:
+            self._handle.set_center(self._global_center())
+
+    def _on_handle_released(self, _global_center: QPointF) -> None:
+        if not self._correcting:
+            return
+        self._correcting = False
+        self._correction_hold = True
+        if self._handle is not None:
+            self._handle.hide()
+        target = self._global_center()
+        self.flash_osd("Hold your gaze on the lens…", duration=1.2)
+        self.correction_committed.emit(target.x(), target.y())
+
+    def _cancel_from_handle(self) -> None:
+        self.cancel_correction()
+
     # --------------------------------------------------------------- Qt events
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -149,11 +258,20 @@ class LensOverlay(QWidget):
         self._timer.start()
 
     def hideEvent(self, event) -> None:
+        if self.correction_active:
+            self.cancel_correction()
+        if self._handle is not None:
+            self._handle.hide()
         self.capture.set_active(False)
         self._timer.stop()
         super().hideEvent(event)
 
     def closeEvent(self, event) -> None:
+        if self.correction_active:
+            self.cancel_correction()
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
         self._timer.stop()
         self.capture.set_active(False)
         screen = self.screen
@@ -162,6 +280,8 @@ class LensOverlay(QWidget):
         super().closeEvent(event)
 
     def _on_screen_geometry_changed(self, _rect) -> None:
+        if self.correction_active:
+            self.cancel_correction()
         self.setGeometry(self.screen.geometry())
         self._configure_native()
         self._update_paint()
@@ -237,7 +357,11 @@ class LensOverlay(QWidget):
         )
         valid = False
         target: QPointF | None = None
-        if can_show and self._locked:
+        if self.correction_active:
+            # The correction handle owns the position; do not let gaze
+            # prediction fight the mouse.
+            valid = can_show
+        elif can_show and self._locked:
             valid = True
         elif can_show:
             center = self.engine.current_center()
@@ -264,21 +388,11 @@ class LensOverlay(QWidget):
             1.0 - math.exp(-dt / 0.09)
         )
         diameter = max(20.0, self._display_diameter)
-        radius = diameter / 2.0
-        width = float(self.screen.geometry().width())
-        height = float(self.screen.geometry().height())
-        if diameter >= width:
-            self._display_center.setX(width / 2.0)
-        else:
-            self._display_center.setX(
-                min(max(self._display_center.x(), radius), width - radius)
-            )
-        if diameter >= height:
-            self._display_center.setY(height / 2.0)
-        else:
-            self._display_center.setY(
-                min(max(self._display_center.y(), radius), height - radius)
-            )
+        self._display_center = self._clamp_center(
+            self._display_center, diameter
+        )
+        if self._correcting and self._handle is not None:
+            self._handle.set_center(self._global_center())
 
         vis_target = 1.0 if valid else 0.0
         tau = 0.10 if vis_target > self._visibility else 0.14
