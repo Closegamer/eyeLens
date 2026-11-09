@@ -4,7 +4,7 @@
 **Status:** v0.6.0 implemented, tested and pushed. Nothing running. Restart and
 re-test; a fresh real-face calibration is the next acceptance test.
 **Repo:** `https://github.com/Closegamer/eyeLens` (private, branch `main`)
-**Code commit:** `fcc4b60` · tag `v0.6.0`
+**Code commit:** `fcc4b60` · follow-up `1cfe01f` · tag `v0.6.0`
 **Chain:** `standalone-08a28c4a` seq 6
 
 ## What changed in v0.6.0

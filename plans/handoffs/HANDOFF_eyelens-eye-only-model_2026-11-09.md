@@ -151,5 +151,7 @@ run.bat
 
 **Closed at:** 2026-11-09
 **Commit:** `fcc4b60` pushed to `origin/main`; tag `v0.6.0` pushed.
+Follow-up `1cfe01f` repaints the bottom calibration hint when the head warning
+changes.
 **Status:** Implemented and verified offline. A fresh real-face calibration is
 the remaining acceptance test.
