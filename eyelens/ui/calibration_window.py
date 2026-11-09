@@ -471,6 +471,7 @@ class CalibrationWindow(QWidget):
         )
         if warning_before != self._head_warning:
             self.update(QRect(0, 60, int(self.width()), 34))
+            self.update(QRect(0, int(self.height()) - 60, int(self.width()), 34))
         if snap.face_found:
             if self._face_since is None:
                 self._face_since = now
