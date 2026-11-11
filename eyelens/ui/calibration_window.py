@@ -59,6 +59,12 @@ class CalibrationWindow(QWidget):
     GRID_X = (0.05, 0.275, 0.5, 0.725, 0.95)
     GRID_Y_TOP = 0.20
     GRID_Y_BOTTOM = 0.90
+    # Head control needs training targets near the real borders so the model
+    # can predict the taskbar and screen corners.  Eye control keeps the more
+    # conservative interior grid, where iris landmarks are reliable.
+    HEAD_GRID_X = (0.03, 0.265, 0.5, 0.735, 0.97)
+    HEAD_GRID_Y_TOP = 0.10
+    HEAD_GRID_Y_BOTTOM = 0.96
     PREVIEW_RECT = QRectF(24, 24, 320, 150)
     FACE_PILL_RECT = QRectF(24, 184, 260, 28)
     VALIDATION_GRID_X = (0.16, 0.5, 0.84)
@@ -190,9 +196,16 @@ class CalibrationWindow(QWidget):
         geometry = self.screen.geometry()
         width = float(geometry.width())
         height = float(geometry.height())
-        top_y = max(height * self.GRID_Y_TOP, 230.0)
-        bottom_y = height * self.GRID_Y_BOTTOM
-        xs = [geometry.left() + width * frac for frac in self.GRID_X]
+        if self._head_control:
+            top_y = height * self.HEAD_GRID_Y_TOP
+            bottom_y = height * self.HEAD_GRID_Y_BOTTOM
+            xs = [
+                geometry.left() + width * frac for frac in self.HEAD_GRID_X
+            ]
+        else:
+            top_y = max(height * self.GRID_Y_TOP, 230.0)
+            bottom_y = height * self.GRID_Y_BOTTOM
+            xs = [geometry.left() + width * frac for frac in self.GRID_X]
         ys = [
             geometry.top() + top_y + (bottom_y - top_y) * index / 4.0
             for index in range(5)

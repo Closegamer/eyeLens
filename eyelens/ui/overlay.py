@@ -14,6 +14,7 @@ from ctypes import wintypes
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
+    QCursor,
     QFont,
     QPainter,
     QPainterPath,
@@ -39,6 +40,76 @@ def screen_info(screen: QScreen) -> ScreenInfo:
         height=geometry.height(),
         dpr=screen.devicePixelRatio(),
     )
+
+
+def clamp_lens_center(
+    center_x: float,
+    center_y: float,
+    lens_width: float,
+    lens_height: float,
+    screen_width: float,
+    screen_height: float,
+) -> tuple[float, float]:
+    """Keep the lens centre on the screen, even if its edge goes off-screen.
+
+    The old behaviour kept the whole lens on screen, which made the very
+    corners and the taskbar unreachable: the lens stopped half a diameter
+    before them.  A magnifier needs to cover the border itself, so the visible
+    part of the lens is allowed to be clipped there.
+    """
+    if lens_width >= screen_width:
+        x = screen_width / 2.0
+    else:
+        x = min(max(float(center_x), 0.0), screen_width)
+    if lens_height >= screen_height:
+        y = screen_height / 2.0
+    else:
+        y = min(max(float(center_y), 0.0), screen_height)
+    return x, y
+
+
+def lens_path_for_rect(rect: QRectF, shape: str) -> QPainterPath:
+    path = QPainterPath()
+    if shape == "round":
+        path.addEllipse(rect)
+    else:
+        corner = min(14.0, min(rect.width(), rect.height()) * 0.06)
+        path.addRoundedRect(rect, corner, corner)
+    return path
+
+
+def lens_source_point(
+    center: QPointF,
+    local_point: QPointF,
+    zoom: float,
+) -> QPointF:
+    """Map a point inside the magnified image to its real screen position.
+
+    The lens shows the area around ``center`` scaled by ``zoom``.  A click at
+    ``local_point`` in the lens therefore belongs to the source point at
+    ``center + (local_point - center) / zoom``.
+    """
+    zoom = max(0.01, float(zoom))
+    return QPointF(
+        center.x() + (local_point.x() - center.x()) / zoom,
+        center.y() + (local_point.y() - center.y()) / zoom,
+    )
+
+
+def point_in_lens(
+    center: QPointF,
+    local_point: QPointF,
+    width: float,
+    height: float,
+    shape: str,
+) -> bool:
+    rect = QRectF(
+        center.x() - width / 2.0,
+        center.y() - height / 2.0,
+        width,
+        height,
+    )
+    return lens_path_for_rect(rect, shape).contains(local_point)
 
 
 class LensOverlay(QWidget):
@@ -82,18 +153,18 @@ class LensOverlay(QWidget):
         self._correcting = False
         self._correction_hold = False
         self._handle: CorrectionHandle | None = None
+        self._force_click_through = False
+        self._pending_click: tuple[QPointF, Qt.MouseButton] | None = None
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
-            | Qt.WindowType.WindowTransparentForInput
             | Qt.WindowType.NoDropShadowWindowHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setGeometry(screen.geometry())
         self.setWindowTitle("eyeLens overlay")
@@ -175,6 +246,7 @@ class LensOverlay(QWidget):
         if self.correction_active:
             return False
         self._correcting = True
+        self._pending_click = None
         self._has_gaze = True
         if not self.isVisible():
             self.show()
@@ -223,19 +295,13 @@ class LensOverlay(QWidget):
     def _clamp_center(
         self, center: QPointF, lens_width: float, lens_height: float
     ) -> QPointF:
-        half_w = lens_width / 2.0
-        half_h = lens_height / 2.0
-        screen_w = float(self.screen.geometry().width())
-        screen_h = float(self.screen.geometry().height())
-        x = (
-            screen_w / 2.0
-            if lens_width >= screen_w
-            else min(max(center.x(), half_w), screen_w - half_w)
-        )
-        y = (
-            screen_h / 2.0
-            if lens_height >= screen_h
-            else min(max(center.y(), half_h), screen_h - half_h)
+        x, y = clamp_lens_center(
+            center.x(),
+            center.y(),
+            lens_width,
+            lens_height,
+            float(self.screen.geometry().width()),
+            float(self.screen.geometry().height()),
         )
         return QPointF(x, y)
 
@@ -278,6 +344,35 @@ class LensOverlay(QWidget):
         self.cancel_correction()
 
     # --------------------------------------------------------------- Qt events
+    def nativeEvent(self, event_type, message):
+        """Hit-test only the lens, not the transparent full-screen window.
+
+        Outside the lens the overlay must remain click-through so the user can
+        keep working.  Inside the lens the overlay receives the click and
+        translates it to the real magnified content.
+        """
+        if platform.system() == "Windows":
+            try:
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == 0x0084:  # WM_NCHITTEST
+                    if self._force_click_through or self.correction_active:
+                        return True, -1  # HTTRANSPARENT
+                    x = ctypes.c_short(msg.lParam & 0xFFFF).value
+                    y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                    origin = self.screen.geometry().topLeft()
+                    dpr = max(1.0, float(self.screen.devicePixelRatio()))
+                    # WM_NCHITTEST coordinates are physical pixels; the lens
+                    # geometry is in Qt logical pixels.
+                    local = QPointF(
+                        x / dpr - origin.x(), y / dpr - origin.y()
+                    )
+                    if self._lens_contains(local):
+                        return True, 1  # HTCLIENT
+                    return True, -1  # HTTRANSPARENT
+            except Exception:
+                pass
+        return super().nativeEvent(event_type, message)
+
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self.setGeometry(self.screen.geometry())
@@ -290,6 +385,7 @@ class LensOverlay(QWidget):
         self._timer.start()
 
     def hideEvent(self, event) -> None:
+        self._pending_click = None
         if self.correction_active:
             self.cancel_correction()
         if self._handle is not None:
@@ -341,7 +437,11 @@ class LensOverlay(QWidget):
             ex_style |= 0x00000080  # WS_EX_TOOLWINDOW
             ex_style |= 0x00080000  # WS_EX_LAYERED
             ex_style |= 0x08000000  # WS_EX_NOACTIVATE
-            ex_style |= 0x00000020  # WS_EX_TRANSPARENT
+            # Interactive lens: the window is hit-testable inside the lens
+            # shape only (see nativeEvent/WM_NCHITTEST).  Do not set
+            # WS_EX_TRANSPARENT here; clicks outside the lens are passed
+            # through by the custom hit test, and clicks inside are translated
+            # to the real magnified content.
             set_window_long(hwnd, gwl_exstyle, ex_style)
 
             user32.SetWindowPos.argtypes = [
@@ -376,6 +476,164 @@ class LensOverlay(QWidget):
                     )
         except Exception as exc:  # pragma: no cover - Windows API dependent
             print(f"eyeLens: overlay styling failed: {exc}", file=sys.stderr)
+
+    def _set_click_through(self, enabled: bool) -> None:
+        """Temporarily let a synthesized click reach the window below.
+
+        The lens itself sits over the content it magnifies.  When the user
+        clicks a magnified control we move the real cursor to the source point
+        and inject a click; during that instant the overlay must not intercept
+        its own injected click.
+        """
+        if platform.system() != "Windows":
+            return
+        try:
+            hwnd = int(self.winId())
+            user32 = ctypes.windll.user32
+            gwl_exstyle = -20
+            get_window_long = getattr(
+                user32, "GetWindowLongPtrW", user32.GetWindowLongW
+            )
+            set_window_long = getattr(
+                user32, "SetWindowLongPtrW", user32.SetWindowLongW
+            )
+            get_window_long.argtypes = [wintypes.HWND, ctypes.c_int]
+            get_window_long.restype = ctypes.c_ssize_t
+            set_window_long.argtypes = [
+                wintypes.HWND,
+                ctypes.c_int,
+                ctypes.c_ssize_t,
+            ]
+            set_window_long.restype = ctypes.c_ssize_t
+            style = get_window_long(hwnd, gwl_exstyle)
+            if enabled:
+                style |= 0x00000020  # WS_EX_TRANSPARENT
+            else:
+                style &= ~0x00000020
+            set_window_long(hwnd, gwl_exstyle, style)
+        except Exception:
+            pass
+
+    # ----------------------------------------------------------- interactive lens
+    def _lens_contains(self, local_point: QPointF) -> bool:
+        if self._visibility <= 0.004:
+            return False
+        return point_in_lens(
+            self._display_center,
+            local_point,
+            max(20.0, self._display_width),
+            max(20.0, self._display_height),
+            self._settings.shape,
+        )
+
+    def _source_point_for(self, local_point: QPointF) -> QPointF:
+        geometry = self.screen.geometry()
+        origin = geometry.topLeft()
+        local = lens_source_point(
+            self._display_center,
+            local_point,
+            self._settings.zoom,
+        )
+        x = min(max(origin.x() + local.x(), geometry.left()), geometry.right())
+        y = min(max(origin.y() + local.y(), geometry.top()), geometry.bottom())
+        return QPointF(x, y)
+
+    def _with_source_cursor(self, source: QPointF) -> None:
+        """Move the real cursor to the source point for one input event."""
+        self._force_click_through = True
+        self._set_click_through(True)
+        self._saved_cursor = QCursor.pos()
+        # The physical click may still have mouse capture on the overlay,
+        # which would route the synthetic click back here regardless of
+        # position or hit-testing.
+        with contextlib.suppress(Exception):
+            self.releaseMouse()
+        with contextlib.suppress(Exception):
+            ctypes.windll.user32.ReleaseCapture()
+        QCursor.setPos(int(round(source.x())), int(round(source.y())))
+
+    def _finish_click_through(self) -> None:
+        self._set_click_through(False)
+        self._force_click_through = False
+
+    def _inject_click(self, source: QPointF, button: Qt.MouseButton) -> None:
+        """Click the real screen at ``source`` without moving the lens."""
+        if platform.system() != "Windows":
+            return
+        flags = {
+            Qt.MouseButton.LeftButton: (0x0002, 0x0004),
+            Qt.MouseButton.RightButton: (0x0008, 0x0010),
+            Qt.MouseButton.MiddleButton: (0x0020, 0x0040),
+        }.get(button)
+        if flags is None:
+            return
+        self._with_source_cursor(source)
+        try:
+            user32 = ctypes.windll.user32
+            user32.mouse_event(flags[0], 0, 0, 0, 0)
+            user32.mouse_event(flags[1], 0, 0, 0, 0)
+        finally:
+            QCursor.setPos(self._saved_cursor)
+            # Keep the window click-through briefly while the input queue
+            # delivers the synthetic click; otherwise it can land back on the
+            # lens.
+            QTimer.singleShot(60, self._finish_click_through)
+
+    def _inject_wheel(
+        self, source: QPointF, delta: int, horizontal: bool
+    ) -> None:
+        if platform.system() != "Windows" or not delta:
+            return
+        self._with_source_cursor(source)
+        try:
+            flag = 0x01000 if horizontal else 0x0800  # HWHEEL / WHEEL
+            data = ctypes.c_uint(int(delta) & 0xFFFFFFFF).value
+            ctypes.windll.user32.mouse_event(flag, 0, 0, data, 0)
+        finally:
+            QCursor.setPos(self._saved_cursor)
+            QTimer.singleShot(60, self._finish_click_through)
+
+    def wheelEvent(self, event) -> None:
+        local = self._local_point(event)
+        if not self._lens_contains(local):
+            event.ignore()
+            return
+        angle = event.angleDelta()
+        if angle.y():
+            self._inject_wheel(self._source_point_for(local), angle.y(), False)
+        elif angle.x():
+            self._inject_wheel(self._source_point_for(local), angle.x(), True)
+        event.accept()
+
+    def _local_point(self, event) -> QPointF:
+        return event.position()
+
+    def mousePressEvent(self, event) -> None:
+        local = self._local_point(event)
+        if not self._lens_contains(local):
+            self._pending_click = None
+            event.ignore()
+            return
+        # Defer the real click until the mouse is released.  Injecting while
+        # the physical button is down means Windows still has mouse capture on
+        # the overlay, so the synthetic click would come straight back here.
+        self._pending_click = (self._source_point_for(local), event.button())
+        event.accept()
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        self.mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        pending = self._pending_click
+        self._pending_click = None
+        if pending is None or not self._lens_contains(
+            self._local_point(event)
+        ):
+            event.ignore()
+            return
+        source, button = pending
+        QTimer.singleShot(10, lambda: self._inject_click(source, button))
+        event.accept()
 
     # -------------------------------------------------------------------- timer
     def _tick(self) -> None:
@@ -469,13 +727,7 @@ class LensOverlay(QWidget):
         )
 
     def _lens_path(self, rect: QRectF) -> QPainterPath:
-        path = QPainterPath()
-        if self._settings.shape == "round":
-            path.addEllipse(rect)
-        else:
-            corner = min(14.0, min(rect.width(), rect.height()) * 0.06)
-            path.addRoundedRect(rect, corner, corner)
-        return path
+        return lens_path_for_rect(rect, self._settings.shape)
 
     def _update_paint(self) -> None:
         now = time.monotonic()

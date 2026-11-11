@@ -1,6 +1,6 @@
 # eyeLens
 
-**A click-through magnifying lens that follows your head.**
+**A magnifying lens that follows your head — and lets you click what it magnifies.**
 
 eyeLens uses an ordinary webcam to estimate where your head is pointing, then
 draws a circular, always-on-top magnifier over that spot. The lens can be any
@@ -29,6 +29,13 @@ settings as a fallback.
 - **Mouse / touch fallback** — if no camera is available, the lens
   automatically follows the mouse, or a finger on a touchscreen, with no
   calibration required. Camera tracking resumes when the camera is back.
+- **Click the magnified content** — buttons, links, menus and scrollable
+  content inside the lens work. A click on the magnified image is translated
+  to the real screen position; right-click, double-click and the wheel are
+  forwarded too. Outside the lens, clicks pass through as usual.
+- **Edge-to-edge** — the lens can reach the screen corners and the taskbar.
+  At a border the lens is partially clipped, which is what lets it magnify the
+  very last pixels instead of stopping half a diameter early.
 - **Guided 25-point calibration + 9-point accuracy check** — about 45 seconds,
   saveable and reusable. The result screen shows the error measured on the
   independent check points.
@@ -46,8 +53,8 @@ settings as a fallback.
 - **Mouse correction** — if the lens sits off target, press `Ctrl+Alt+D`,
   drag the small handle to where you are looking, and release. The model
   learns that local correction immediately.
-- **Truly click-through** — the overlay uses `WS_EX_TRANSPARENT`; clicks, scrolls,
-  and keyboard input go to the app underneath.
+- **Click-through outside the lens** — only the lens shape is hit-testable;
+  clicks, scrolls and keyboard input outside it go to the app underneath.
 - **No self-reflection** — the lens is excluded from its own screen capture
   (`WDA_EXCLUDEFROMCAPTURE`), so it never films itself.
 - **Tray + global hotkeys** — control everything while another app has focus.
@@ -98,7 +105,8 @@ can be opened.
 3. **Aim your head** at each of the 25 dots: turn or move your head until you
    are facing the dot, then hold still for a moment. Your eyes are not used for
    control, so you can blink or look around freely. The dot turns into a
-   progress ring while samples are collected.
+   progress ring while samples are collected. Head-mode dots reach close to the
+   real screen borders so the taskbar and corners are covered.
 4. After the 25th dot, eyeLens repeats a short 9-dot **accuracy check** on
    points it did not train on. This measures the real error instead of guessing.
 5. When the result appears, press **Enter** to keep the calibration or **R** to
@@ -157,6 +165,11 @@ Everything is also available from the tray icon and the settings window:
 - **Opacity** — how strongly the lens covers the content underneath.
 - **Outline / On-screen HUD** — visual chrome and the small zoom/size badge.
 - **Freeze** — keeps the lens where it is while your head or eyes move.
+- **Interactive lens** — click, right-click, double-click or scroll on the
+  magnified image. eyeLens moves the input to the corresponding real screen
+  position and then restores the pointer. Outside the lens, input is passed
+  through untouched. Dragging inside the lens is not remapped yet; use the
+  wheel or click-drag outside the lens for now.
 - **Fix position** — turns the lens into a draggable handle; drop it where you
   are looking and the model learns that correction. Also `Ctrl+Alt+D`.
 - **Camera** — choose a different webcam index and apply it. Changing the camera
@@ -177,7 +190,8 @@ webcam ──► MediaPipe Face Landmarker (478 landmarks)
        ──► if no camera: follow the global pointer (mouse / touch)
        ──► lens position (screen logical pixels)
        ──► padded 30 fps screen capture around the lens
-       ──► always-on-top click-through Qt overlay
+       ──► always-on-top interactive Qt overlay
+            clicks on the lens are mapped back to the real source point
 ```
 
 A few implementation details that matter:
@@ -262,6 +276,16 @@ facing, and release. eyeLens stores a local correction and keeps it. Repeat in
 other screen regions if needed. Recalibrate to discard all corrections and
 start over.
 
+**A click inside the lens lands on the wrong thing.**
+The click is sent to the real pixel currently shown under the pointer. Wait for
+the lens to settle if it is still gliding, then click. Dragging inside the lens
+is not remapped yet; click-drag outside the lens instead.
+
+**The lens is cut off at the screen edge.**
+This is expected: the lens centre can now reach the last pixel of the screen so
+it can magnify the taskbar and corners. The part beyond the screen is clipped,
+but the visible part shows the edge content.
+
 **The lens does not follow my eyes any more.**
 That is the default. Head control ignores iris position on purpose. Switch
 **Control** to **Eyes** in the settings and calibrate again if you want gaze
@@ -327,7 +351,7 @@ eyelens/
 │   ├── tracker.py            camera + MediaPipe thread
 │   └── engine.py             prediction + smoothing + demo mode
 └── ui/
-    ├── overlay.py            click-through always-on-top lens
+    ├── overlay.py            interactive always-on-top lens
     ├── calibration_window.py full-screen calibration flow
     ├── correction_handle.py small draggable mouse-correction handle
     ├── settings_window.py    settings, status, camera preview
