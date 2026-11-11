@@ -1,4 +1,4 @@
-# eyeLens — head-controlled lens (v0.9.0)
+# eyeLens — head-controlled lens with pointer fallback (v0.9.1)
 
 **Date:** 2026-11-12
 **Status:** IMPLEMENTED — real head calibration pending
@@ -53,8 +53,22 @@ the default.  Eye control is retained only as an optional fallback in Settings.
   - OSD and correction prompts say “head/facing” in head mode.
 - **Mouse correction:** works in both modes; head mode captures the recent
   head features without requiring open eyes.
+- **Mouse / touch pointer fallback (v0.9.1):**
+  - When the tracker reports an error (no camera, camera busy, missing face
+    model) or is still not ready after 7 seconds, the app enters pointer mode.
+  - `GazeEngine.set_pointer_fallback(True)` follows `QCursor.pos()` at 60 Hz;
+    no model or calibration is required. Windows maps touchscreen input to
+    pointer movement, so a finger works like the mouse.
+  - The lens overlay treats pointer mode as available; show/hide, freeze,
+    zoom, size, and big-lens controls all keep working. Correction is disabled
+    because pointer control is already exact.
+  - `EyeLensApp` shows **Mouse / touch** in the status, sets `lens_visible`,
+    and tells the user to press **Apply** to retry the camera.
+  - If the camera becomes ready and a matching calibration exists, the app
+    automatically leaves pointer mode and resumes camera tracking. Without a
+    calibration it stays in pointer mode so the lens remains usable.
 - **UI/docs:** settings header, Control row, calibration help, status labels,
-  result screen, README, version `0.9.0`.
+  result screen, README, version `0.9.1`.
 
 ## Key Decisions
 
@@ -76,7 +90,7 @@ the default.  Eye control is retained only as an optional fallback in Settings.
 
 | Check | Result |
 | --- | --- |
-| `pytest` | 42 passed |
+| `pytest` | 44 passed |
 | `ruff check .` | clean |
 | `compileall eyelens` | clean |
 | `python -m eyelens --smoke-test` | exit 0; reports old calibration needs recalibration |
@@ -84,6 +98,8 @@ the default.  Eye control is retained only as an optional fallback in Settings.
 | synthetic head engine test | eyes closed (`openness=0`) still gives “Head tracking”; center 960,600 → moved 1632,960 when head features moved |
 | head model unit tests | iris changes do not affect prediction; head changes do; save/load preserves mode and predictions |
 | old mode load test | legacy `iris8` without `control_mode` resolves to eyes |
+| pointer fallback app test | real `EyeLensApp` with missing model: fallback active, engine “Mouse / touch”, overlay visible, lens setting on |
+| pointer engine tests | pointer mode works with no camera/model and is idempotent |
 
 The synthetic E2E script lives outside the repo at
 `C:\Users\avgrigorev\AppData\Local\Temp\opencode\head_calibration_e2e.py`.
@@ -110,14 +126,18 @@ eye/pose calibration. The first head calibration will overwrite it.
 
 1. **Real head calibration and acceptance test** (above). This is the
    decisive test of v0.9.
-2. If head control works but feels too sensitive:
+2. **No-camera acceptance test:** disable or occupy the camera, start eyeLens,
+   and confirm the lens appears and follows the mouse or a finger on the
+   touchscreen. Restore the camera and press **Apply**; with a head
+   calibration present, tracking should resume automatically.
+3. If head control works but feels too sensitive:
    - tune the global smoothing default or add a head-specific gain slider;
    - consider a small deadzone around the centre.
-3. If the mapping quality is poor:
+4. If the mapping quality is poor:
    - compare the six proxy features with MediaPipe’s raw 6-DOF pose features;
    - record per-point residuals before changing the model;
    - try a denser 6×6 head grid only if the error is a sampling problem.
-4. Keep eye mode working; it shares the same model code but a different feature
+5. Keep eye mode working; it shares the same model code but a different feature
    mask and calibration protocol.
 
 ## Risks & Blockers
@@ -129,16 +149,22 @@ eye/pose calibration. The first head calibration will overwrite it.
   position after calibration moves the lens.
 - Mode switching discards the in-memory model; only one calibration file is
   stored, so switching back may require recalibrating.
+- Pointer fallback relies on the Windows pointer position. Touchscreens normally
+  promote touch to pointer movement; a touch-aware app that suppresses pointer
+  promotion may not update the lens. If that happens, the next step is a
+  Windows pointer/raw-input listener rather than `QCursor.pos()`.
 - `Modelfile` in the repo root remains an unrelated untracked file; leave it.
 
 ## Exact State
 
 - Repo: `https://github.com/Closegamer/eyeLens` (private, `main`)
-- Version: `0.9.0`
-- Code commit: `3caf05b` — `feat: head-controlled lens with eye mode fallback (v0.9.0)`
-- Tag: `v0.9.0`
+- Version: `0.9.1`
+- Code commits:
+  - `3caf05b` — `feat: head-controlled lens with eye mode fallback (v0.9.0)`
+  - `c1506c0` — `feat: mouse and touch pointer fallback when the camera is unavailable (v0.9.1)`
+- Tags: `v0.9.0`, `v0.9.1`
 - Virtualenv: `C:\a_REPOS\eyeLense\.venv` (Python 3.12)
-- Tests: 42 passed; ruff clean; smoke exit 0
+- Tests: 44 passed; ruff clean; smoke exit 0
 - Settings default: `control_mode="head"`; schema remains 2
 - Old calibration file is rejected on load
 
@@ -156,6 +182,10 @@ run.bat
 # Calibrate: aim your head at each dot and hold still (~45 s).
 # Check the measured error and whether the lens follows your head.
 # If it does not: record the error, try Smoothing, then inspect the mapping.
+
+# Pointer fallback (no camera):
+# Disable/unplug the camera, start eyeLens, and confirm the lens follows the
+# mouse or a finger. Restore the camera and press Apply in Settings.
 ```
 
 Key files:
@@ -164,5 +194,7 @@ Key files:
 - `eyelens/gaze/model.py` — head/eye feature selection, v3 save/load.
 - `eyelens/ui/calibration_window.py` — head aiming protocol and texts.
 - `eyelens/ui/settings_window.py` — Control combo and mode help.
-- `eyelens/gaze/engine.py` — head-mode gating/filtering.
-- `eyelens/app.py` — mode validation, calibration wiring, status copy.
+- `eyelens/gaze/engine.py` — head-mode gating/filtering and pointer fallback.
+- `eyelens/app.py` — mode validation, calibration wiring, pointer fallback,
+  status copy.
+- `eyelens/ui/overlay.py` — shows the lens in pointer mode and mode-aware OSD.
