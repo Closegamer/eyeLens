@@ -1,53 +1,55 @@
 # eyeLens — Continue Session
 
-**Memory:** `plans/handoffs/HANDOFF_eyelens-stable-motion_2026-11-10.md`
-**Status:** v0.8.0 implemented, tested and pushed. The previous calibration was
-rejected; a fresh stable+motion recalibration is required.
+**Memory:** `plans/handoffs/HANDOFF_eyelens-head-control_2026-11-12.md`
+**Status:** v0.9.0 implemented, tested, tagged. **Real head calibration pending.**
 **Repo:** `https://github.com/Closegamer/eyeLens` (private, branch `main`)
-**Code commit:** `302e6b2` · tag `v0.8.0`
-**Chain:** `standalone-08a28c4a` seq 8
+**Code commit:** `3caf05b` · tag `v0.9.0`
+**Chain:** `standalone-08a28c4a` seq 9
 
-## What changed in v0.8.0
+## What changed in v0.9.0
 
-- **Real data showed the shuffled dot order was harmful**: several dots were
-  mislooked, validation error 262 px. The predictable **centre-out** order is
-  restored and settle time is 0.65 s.
-- **Each dot now has a stable part and a head-movement part**:
-  - first 0.65 s: hold still; frames train the base eye-only model;
-  - next 1.0 s: keep eyes on the dot and slowly move your head left/right;
-    frames train the head-pose correction.
-- The pose correction is fitted on motion frames (same target, varied pose),
-  stored as reusable coefficients, and enabled only if the combined stable+motion
-  validation improves by ≥5% and ≥10 px.
-- **Quality gate**: the result screen refuses Enter/Space unless the measured
-  error is ≤150 px; press R to retry. Bad calibrations cannot be saved.
-- The old v0.7 pose calibration has no usable motion correction record and is
-  **rejected**; eyeLens will ask for recalibration.
-- Calibration now takes about **80 seconds**. The active dot is larger/brighter.
-- Version `0.8.0`.
+- **The lens is now controlled by the head, not the eyes.** Head control is the
+  default. It fits only the six gaze-independent head/face features, so moving
+  your eyes, blinking, or closing your eyes does not move or freeze the lens.
+- **Eye control is still available** in Settings → **Control**. Each mode needs
+  its own calibration; switching mode invalidates the current one.
+- **Head calibration is aim-and-hold:** turn or move your head to face each of
+  the 25 dots, then hold still. 9 held-out accuracy dots follow. About 45 s.
+  There is no stable/motion split and no head-pose correction in head mode.
+- **Model version 3** saves `control_mode` (`head`/`eyes`) and `model_mode`
+  (`head6`/`iris8`). Old v0.7/v0.8 calibrations are rejected.
+- Runtime status says **Head tracking**; the eye-openness gate is skipped in
+  head mode and the 1€ filter is slightly faster.
+- UI copy, calibration previews, result screen, mouse correction prompts,
+  README and version (`0.9.0`) were updated.
 
 ## What is next
 
-1. Restart eyeLens (old calibration rejected), click **Calibrate**.
-2. For each dot: hold still first, then keep eyes on the dot and move your head
-   slowly left/right for the motion part.
-3. The result must be “Good” (≤150 px) to accept. Check whether the summary says
-   **head pose**.
-4. If still >150 px, try again; if repeated, next options: denser 6×6 grid,
-   explicit left-right/up-down motion, or a proper 3D gaze/head model.
-5. Real-face calibration and mouse-correction quality remain the acceptance
-   tests.
+1. Start eyeLens (`run.bat`). Settings should show **Control: Head**.
+2. Click **Calibrate now**.
+3. For each dot, turn or move your head until you are facing it, then hold
+   still while the ring fills. Do not just glance with your eyes.
+4. The result must be “Good” (≤150 px) to accept; press Enter. Record the
+   measured error.
+5. Check that the lens follows your head and stays put while only your eyes
+   move or while you blink.
+6. Use `Ctrl+Alt+D` to drag the lens to any off spot; the head model learns it.
+7. If head control feels too sensitive or laggy, adjust **Smoothing** and report
+   the direction. If accuracy is poor, record the px error and per-region
+   behaviour before changing the model.
 
 ## Exact state
 
 - Virtualenv: `C:\a_REPOS\eyeLense\.venv` (Python 3.12).
-- Version: `0.8.0`.
-- Tests: 34 passed; ruff clean; smoke test exit 0; synthetic calibration E2E
-  passes; synthetic pose-correction and save/load tests pass; old v0.7
-  calibration load is rejected.
-- `Modelfile` in the repo root is still an unrelated pre-existing file; leave it
-  untracked.
-- This `continue_session.md` and the formal v0.8 handoff are committed together
-  in the session handoff commit. The next session should read
-  `continue_session.md` first, then the handoff, and start with the stable+motion
-  recalibration.
+- Version: `0.9.0`.
+- Tests: 42 passed; ruff clean; compileall clean; smoke test exit 0.
+- Synthetic head calibration E2E (real `CalibrationWindow` state machine,
+  fake tracker): 34 points, 0.0 px error, quality OK.
+- Synthetic head engine test: eyes closed still gives “Head tracking”; head
+  movement moves the lens in the expected direction.
+- `%LOCALAPPDATA%\eyeLens\calibration.json` is still an old rejected
+  eye/pose calibration; the first head calibration overwrites it.
+- `Modelfile` in the repo root is an unrelated pre-existing untracked file;
+  leave it untracked.
+- No real-face head calibration has been run yet. That is the next decisive
+  test.
