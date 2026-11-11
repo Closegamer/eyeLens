@@ -4,8 +4,10 @@
 **Status:** v0.11.0 implemented, tested, tagged. **Real head calibration and
 wheel-trim acceptance tests pending.**
 **Repo:** `https://github.com/Closegamer/eyeLens` (private, branch `main`)
-**Code commits:** `3caf05b` (head control), `c1506c0` (pointer fallback),
-`10a5abe` (interactive lens + edge reach), `d44cece` (wheel fine trim)
+**Code commits:** `5a24534` (head control), `882fed9` (pointer fallback),
+`7225e20` (interactive lens + edge reach), `72f00b3` (wheel fine trim)
+**History:** author/committer email rewritten to `closegamer@mail.ru` on
+2026-11-12; commit hashes changed and the branch was force-pushed.
 **Tags:** `v0.9.0`, `v0.9.1`, `v0.10.0`, `v0.11.0`
 **Chain:** `standalone-08a28c4a` seq 9
 

@@ -225,10 +225,12 @@ eye/pose calibration. The first head calibration will overwrite it.
 - Repo: `https://github.com/Closegamer/eyeLens` (private, `main`)
 - Version: `0.11.0`
 - Code commits:
-  - `3caf05b` — `feat: head-controlled lens with eye mode fallback (v0.9.0)`
-  - `c1506c0` — `feat: mouse and touch pointer fallback when the camera is unavailable (v0.9.1)`
-  - `10a5abe` — `feat: interactive lens clicks, edge-to-edge reach, head border targets (v0.10.0)`
-  - `d44cece` — `feat: Ctrl+Alt+wheel lens fine trim (v0.11.0)`
+  - `5a24534` — `feat: head-controlled lens with eye mode fallback (v0.9.0)`
+  - `882fed9` — `feat: mouse and touch pointer fallback when the camera is unavailable (v0.9.1)`
+  - `7225e20` — `feat: interactive lens clicks, edge-to-edge reach, head border targets (v0.10.0)`
+  - `72f00b3` — `feat: Ctrl+Alt+wheel lens fine trim (v0.11.0)`
+  - History rewritten on 2026-11-12 so all author/committer emails are
+    `closegamer@mail.ru`; the branch was force-pushed.
 - Tags: `v0.9.0`, `v0.9.1`, `v0.10.0`, `v0.11.0`
 - Virtualenv: `C:\a_REPOS\eyeLense\.venv` (Python 3.12)
 - Tests: 48 passed; ruff clean; smoke exit 0
