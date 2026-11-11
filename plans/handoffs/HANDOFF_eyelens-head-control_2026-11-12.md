@@ -1,4 +1,4 @@
-# eyeLens — head-controlled lens with pointer fallback (v0.9.1)
+# eyeLens — head control, pointer fallback, interactive lens (v0.10.0)
 
 **Date:** 2026-11-12
 **Status:** IMPLEMENTED — real head calibration pending
@@ -67,8 +67,30 @@ the default.  Eye control is retained only as an optional fallback in Settings.
   - If the camera becomes ready and a matching calibration exists, the app
     automatically leaves pointer mode and resumes camera tracking. Without a
     calibration it stays in pointer mode so the lens remains usable.
+- **Interactive lens clicks (v0.10.0):**
+  - The overlay is no longer fully `WS_EX_TRANSPARENT`.  `nativeEvent`
+    handles `WM_NCHITTEST`: HTCLIENT inside the current lens shape,
+    HTTRANSPARENT everywhere else.  Clicks outside still reach the desktop.
+  - `mousePressEvent` records the mapped source point and defers the real
+    click until `mouseReleaseEvent`.  Injecting while the physical button is
+    down makes Windows route the synthetic click back to the overlay.
+  - `_inject_click` sets `_force_click_through`, warps the cursor to the
+    source point, sends `mouse_event` down/up, restores the cursor, and keeps
+    click-through for 60 ms while input is delivered.
+  - Left, right and middle buttons, double-clicks, vertical and horizontal
+    wheel are forwarded.  Drags are not remapped yet.
+  - `WM_NCHITTEST` coordinates are physical pixels; they are divided by the
+    screen device pixel ratio before the logical lens hit-test.
+- **Edge-to-edge lens (v0.10.0):**
+  - `clamp_lens_center` allows the lens centre anywhere from `0` to the screen
+    width/height.  The lens is partially clipped at the border by design.
+  - This makes the taskbar and corners reachable; previously the lens stopped
+    half a diameter inside the screen.
+  - Head calibration uses near-border targets:
+    x = 0.03/0.265/0.5/0.735/0.97, y = 0.10..0.96, so the head model can
+    predict the taskbar.  Eye mode keeps the conservative interior grid.
 - **UI/docs:** settings header, Control row, calibration help, status labels,
-  result screen, README, version `0.9.1`.
+  result screen, README, version `0.10.0`.
 
 ## Key Decisions
 
@@ -90,7 +112,7 @@ the default.  Eye control is retained only as an optional fallback in Settings.
 
 | Check | Result |
 | --- | --- |
-| `pytest` | 44 passed |
+| `pytest` | 47 passed |
 | `ruff check .` | clean |
 | `compileall eyelens` | clean |
 | `python -m eyelens --smoke-test` | exit 0; reports old calibration needs recalibration |
@@ -100,6 +122,11 @@ the default.  Eye control is retained only as an optional fallback in Settings.
 | old mode load test | legacy `iris8` without `control_mode` resolves to eyes |
 | pointer fallback app test | real `EyeLensApp` with missing model: fallback active, engine “Mouse / touch”, overlay visible, lens setting on |
 | pointer engine tests | pointer mode works with no camera/model and is idempotent |
+| native lens hit-test | `WM_NCHITTEST` inside lens = HTCLIENT (1), outside = HTTRANSPARENT (-1) |
+| native mapped click | physical click on lens at (399,274), source target center (349,249) received the click |
+| native wheel | wheel -120 forwarded to the target under the lens |
+| edge reach screenshot | lens centre reached (1918,1198) on 1920×1200; taskbar corner visible in clipped lens |
+| head border grid | synthetic head calibration still 34 points, 0.0 px |
 
 The synthetic E2E script lives outside the repo at
 `C:\Users\avgrigorev\AppData\Local\Temp\opencode\head_calibration_e2e.py`.
@@ -125,19 +152,24 @@ eye/pose calibration. The first head calibration will overwrite it.
 ## Where We’re Going
 
 1. **Real head calibration and acceptance test** (above). This is the
-   decisive test of v0.9.
+   decisive test of v0.10.
 2. **No-camera acceptance test:** disable or occupy the camera, start eyeLens,
    and confirm the lens appears and follows the mouse or a finger on the
    touchscreen. Restore the camera and press **Apply**; with a head
    calibration present, tracking should resume automatically.
-3. If head control works but feels too sensitive:
+3. **Interactive/edge acceptance test:** click magnified buttons, right-click,
+   double-click and scroll inside the lens; verify the real control receives
+   the action. Point/look at the taskbar and corners; the lens should reach
+   them and be partially clipped. Verify clicks outside the lens still pass
+   through.
+4. If head control works but feels too sensitive:
    - tune the global smoothing default or add a head-specific gain slider;
    - consider a small deadzone around the centre.
-4. If the mapping quality is poor:
+5. If the mapping quality is poor:
    - compare the six proxy features with MediaPipe’s raw 6-DOF pose features;
    - record per-point residuals before changing the model;
    - try a denser 6×6 head grid only if the error is a sampling problem.
-5. Keep eye mode working; it shares the same model code but a different feature
+6. Keep eye mode working; it shares the same model code but a different feature
    mask and calibration protocol.
 
 ## Risks & Blockers
@@ -153,18 +185,26 @@ eye/pose calibration. The first head calibration will overwrite it.
   promote touch to pointer movement; a touch-aware app that suppresses pointer
   promotion may not update the lens. If that happens, the next step is a
   Windows pointer/raw-input listener rather than `QCursor.pos()`.
+- Magnified input is implemented with `mouse_event` after warping the cursor.
+  Windows UIPI blocks synthetic input to elevated (admin) apps. Drags inside
+  the lens are not remapped; only clicks, double-clicks, right-clicks and the
+  wheel. Hover/tooltips and cursor shapes are not forwarded.
+- The lens is intentionally partially clipped at screen edges; that is how it
+  reaches the taskbar. Users who prefer a fully visible lens could get an
+  optional "keep lens on screen" toggle later.
 - `Modelfile` in the repo root remains an unrelated untracked file; leave it.
 
 ## Exact State
 
 - Repo: `https://github.com/Closegamer/eyeLens` (private, `main`)
-- Version: `0.9.1`
+- Version: `0.10.0`
 - Code commits:
   - `3caf05b` — `feat: head-controlled lens with eye mode fallback (v0.9.0)`
   - `c1506c0` — `feat: mouse and touch pointer fallback when the camera is unavailable (v0.9.1)`
-- Tags: `v0.9.0`, `v0.9.1`
+  - `10a5abe` — `feat: interactive lens clicks, edge-to-edge reach, head border targets (v0.10.0)`
+- Tags: `v0.9.0`, `v0.9.1`, `v0.10.0`
 - Virtualenv: `C:\a_REPOS\eyeLense\.venv` (Python 3.12)
-- Tests: 44 passed; ruff clean; smoke exit 0
+- Tests: 47 passed; ruff clean; smoke exit 0
 - Settings default: `control_mode="head"`; schema remains 2
 - Old calibration file is rejected on load
 
@@ -186,6 +226,10 @@ run.bat
 # Pointer fallback (no camera):
 # Disable/unplug the camera, start eyeLens, and confirm the lens follows the
 # mouse or a finger. Restore the camera and press Apply in Settings.
+
+# Interactive lens / edges:
+# Move the lens over a button and click the magnified image; right-click and
+# scroll. Point/look at the taskbar and corners; the lens should reach them.
 ```
 
 Key files:
@@ -197,4 +241,5 @@ Key files:
 - `eyelens/gaze/engine.py` — head-mode gating/filtering and pointer fallback.
 - `eyelens/app.py` — mode validation, calibration wiring, pointer fallback,
   status copy.
-- `eyelens/ui/overlay.py` — shows the lens in pointer mode and mode-aware OSD.
+- `eyelens/ui/overlay.py` — pointer-mode lens, edge-aware clamping, custom
+  hit-test, mapped clicks/right-clicks/double-clicks/wheel.
