@@ -250,7 +250,7 @@ class SettingsWindow(QWidget):
         titles.addWidget(title)
         titles.addWidget(subtitle)
         header.addLayout(titles, 1)
-        version = QLabel("v0.9")
+        version = QLabel("v0.9.1")
         version.setObjectName("badge")
         header.addWidget(version, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(header)
@@ -329,7 +329,9 @@ class SettingsWindow(QWidget):
         self.control_combo.addItem("Eyes", "eyes")
         self.control_combo.setToolTip(
             "Head: move or turn your head to move the lens (recommended). "
-            "Eyes: follow your gaze. Switching mode requires recalibration."
+            "Eyes: follow your gaze. Switching mode requires recalibration. "
+            "If no camera is available, the lens automatically follows the "
+            "mouse or a finger on the touchscreen."
         )
         self.control_combo.currentIndexChanged.connect(self._on_control_mode)
         control_row.addWidget(control_label)
@@ -793,7 +795,9 @@ class SettingsWindow(QWidget):
         self.correct_button.setEnabled(info.can_correct)
         self.big_button.setEnabled(info.can_big)
         self.calibrate_button.setText(
-            "Recalibrate" if info.calibration_text != "Not calibrated" else "Calibrate now"
+            "Calibrate now"
+            if info.calibration_text in ("Not calibrated", "Pointer mode")
+            else "Recalibrate"
         )
         self.camera_spin.setEnabled(not info.demo)
         self.restart_camera_button.setEnabled(not info.demo)

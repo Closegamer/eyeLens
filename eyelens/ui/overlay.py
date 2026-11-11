@@ -144,12 +144,15 @@ class LensOverlay(QWidget):
 
     def toggle_locked(self) -> None:
         self._locked = not self._locked
-        follows = (
-            "head"
-            if self.engine.model is not None
+        if self.engine.demo or self.engine.pointer_fallback:
+            follows = "the pointer"
+        elif (
+            self.engine.model is not None
             and self.engine.model.control_mode == "head"
-            else "gaze"
-        )
+        ):
+            follows = "your head"
+        else:
+            follows = "your gaze"
         self.flash_osd(
             "Lens locked" if self._locked else f"Lens follows {follows}"
         )
@@ -382,7 +385,9 @@ class LensOverlay(QWidget):
 
         settings = self._settings
         can_show = settings.lens_visible and (
-            self.engine.demo or self.engine.model is not None
+            self.engine.demo
+            or self.engine.pointer_fallback
+            or self.engine.model is not None
         )
         valid = False
         target: QPointF | None = None

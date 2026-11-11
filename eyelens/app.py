@@ -60,6 +60,8 @@ class EyeLensApp(QObject):
         self._settings_visible_once = False
         self._tray_notice_shown = False
         self._calibration_invalid = False
+        self._pointer_fallback = False
+        self._fallback_reason = ""
         self._screen_change_pending = False
         self._correction_target: tuple[float, float] | None = None
         self._correction_release_at = 0.0
@@ -134,6 +136,10 @@ class EyeLensApp(QObject):
 
         if self.tracker is not None:
             self.tracker.start()
+            # Camera drivers can block for several seconds before reporting a
+            # failure.  If nothing is usable by then, keep the lens useful in
+            # pointer mode instead of leaving the user with "Camera error".
+            QTimer.singleShot(7000, self._check_camera_fallback)
         self._sync_tray_menu()
 
         if self.demo or self.model is not None:
@@ -186,6 +192,7 @@ class EyeLensApp(QObject):
         index = self.settings.camera_index if camera_index is None else camera_index
         tracker = EyeTracker(self.model_path, camera_index=index, parent=self)
         tracker.error.connect(self._on_tracker_error)
+        tracker.ready.connect(self._on_tracker_ready)
         return tracker
 
     def _build_tray(self) -> None:
@@ -273,6 +280,46 @@ class EyeLensApp(QObject):
                 "to use head tracking."
             )
             info.can_calibrate = False
+            info.can_correct = False
+            info.can_big = True
+            return info
+
+        if self._pointer_fallback:
+            tracker = self.tracker
+            camera_ready = False
+            if tracker is None:
+                info.camera_text = "Unavailable"
+                info.camera_level = "bad"
+            elif tracker.error_text:
+                info.camera_text = "Camera error"
+                info.camera_level = "bad"
+            elif not tracker.isRunning() or not tracker.is_ready:
+                info.camera_text = "Starting…"
+                info.camera_level = "warn"
+            else:
+                camera_ready = True
+                fps = tracker.snapshot().fps
+                info.camera_text = (
+                    f"Running · {fps:.0f} fps" if fps > 0 else "Running"
+                )
+                info.camera_level = "ok"
+            info.gaze_text = "Mouse / touch"
+            info.gaze_level = "accent"
+            info.calibration_text = "Pointer mode"
+            info.calibration_level = "accent"
+            if camera_ready:
+                info.calibration_detail = (
+                    "The camera is available, but head tracking needs a "
+                    "calibration. Move the lens with the mouse or a finger on "
+                    "the touchscreen, or calibrate now."
+                )
+            else:
+                info.calibration_detail = (
+                    "Camera tracking is unavailable. Move the lens with the "
+                    "mouse or a finger on the touchscreen. Use Settings → Apply "
+                    "to retry the camera; head tracking resumes when it is ready."
+                )
+            info.can_calibrate = camera_ready
             info.can_correct = False
             info.can_big = True
             return info
@@ -387,7 +434,9 @@ class EyeLensApp(QObject):
         self._tray_show_lens.setChecked(self.settings.lens_visible)
         self._tray_freeze.setChecked(self.overlay.locked)
         self._tray_big.setChecked(self._big_previous_diameter is not None)
-        available = self.demo or self.model is not None
+        available = (
+            self.demo or self.model is not None or self._pointer_fallback
+        )
         self._tray_correct.setEnabled(info.can_correct)
         self._tray_big.setEnabled(available)
         self._tray_zoom_in.setEnabled(available)
@@ -414,7 +463,8 @@ class EyeLensApp(QObject):
             self.engine.set_model(None)
             if self.overlay.correction_active:
                 self.overlay.cancel_correction()
-            self.overlay.hide()
+            if not self._pointer_fallback:
+                self.overlay.hide()
             label = "head" if self.settings.control_mode == "head" else "eye"
             self._notify(
                 "Recalibrate for " + label + " control",
@@ -458,7 +508,7 @@ class EyeLensApp(QObject):
 
     # -------------------------------------------------------------- controls
     def toggle_lens(self) -> None:
-        if not self.demo and self.model is None:
+        if not self.demo and self.model is None and not self._pointer_fallback:
             self._notify("Calibrate first", "Calibrate eyeLens before showing the lens.")
             return
         self.settings.lens_visible = not self.settings.lens_visible
@@ -477,7 +527,7 @@ class EyeLensApp(QObject):
             self.overlay.flash_osd("Lens on")
 
     def toggle_freeze(self) -> None:
-        if not self.demo and self.model is None:
+        if not self.demo and self.model is None and not self._pointer_fallback:
             self._notify("Calibrate first", "The freeze control needs a calibrated lens.")
             return
         self.overlay.toggle_locked()
@@ -488,7 +538,7 @@ class EyeLensApp(QObject):
         return preferred_big_diameter(self.screen_data.height)
 
     def toggle_big_lens(self) -> None:
-        if not self.demo and self.model is None:
+        if not self.demo and self.model is None and not self._pointer_fallback:
             self.settings_window.set_big_lens(False)
             self._sync_tray_menu()
             self._notify(
@@ -540,6 +590,13 @@ class EyeLensApp(QObject):
         """Let the user drag the lens to the right spot; the model learns it."""
         if self.demo:
             self._notify("Demo mode", "Correction is unavailable in mouse demo mode.")
+            return
+        if self._pointer_fallback:
+            self._notify(
+                "Pointer control",
+                "The lens already follows the mouse or finger exactly; no "
+                "correction is needed while the camera is unavailable.",
+            )
             return
         if self.model is None:
             self._notify("Calibrate first", "Calibrate eyeLens before correcting it.")
@@ -665,7 +722,7 @@ class EyeLensApp(QObject):
         )
 
     def adjust_zoom(self, delta: float) -> None:
-        if not self.demo and self.model is None:
+        if not self.demo and self.model is None and not self._pointer_fallback:
             return
         self.settings.zoom = round(
             max(
@@ -681,7 +738,7 @@ class EyeLensApp(QObject):
         self._sync_tray_menu()
 
     def adjust_size(self, delta: int) -> None:
-        if not self.demo and self.model is None:
+        if not self.demo and self.model is None and not self._pointer_fallback:
             return
         low, high = Settings.DIAMETER_RANGE
         self.settings.diameter = int(
@@ -774,6 +831,10 @@ class EyeLensApp(QObject):
         self.settings.control_mode = model.control_mode
         self.engine.screen = self.screen_data
         self.engine.set_model(model)
+        if self._pointer_fallback:
+            self._pointer_fallback = False
+            self._fallback_reason = ""
+            self.engine.set_pointer_fallback(False)
         self.settings.lens_visible = True
         self.overlay.apply_settings(self.settings)
         if not self.overlay.isVisible():
@@ -807,12 +868,94 @@ class EyeLensApp(QObject):
         self.settings_window.refresh_status()
 
     def _restore_overlay_after_calibration(self) -> None:
-        if self.demo or self.model is not None:
+        if self.demo or self.model is not None or self._pointer_fallback:
             if not self.overlay.isVisible():
                 self.overlay.show()
             self.overlay.raise_()
         if self._settings_visible_once:
             self.settings_window.show_window()
+
+    # --------------------------------------------------------- pointer fallback
+    def _enter_pointer_fallback(self, reason: str) -> None:
+        """Keep the lens usable with the mouse/touch when the camera is gone."""
+        if self.demo or self._quitting:
+            return
+        self._fallback_reason = str(reason or "")
+        if self._pointer_fallback:
+            self.settings_window.refresh_status()
+            self._sync_tray_menu()
+            return
+
+        self._pointer_fallback = True
+        self.engine.set_pointer_fallback(True)
+        self.settings.lens_visible = True
+        self._save_timer.start()
+        self.overlay.apply_settings(self.settings)
+        if self.calibration_window is None:
+            if self.overlay.correction_active:
+                self.overlay.cancel_correction()
+            if not self.overlay.isVisible():
+                self.overlay.show()
+            self.overlay.raise_()
+            self.overlay.flash_osd("Pointer control · no camera", duration=2.4)
+        self.settings_window.sync_from_settings()
+        self.settings_window.refresh_status()
+        self._sync_tray_menu()
+        if self.calibration_window is None:
+            self._notify(
+                "Pointer control enabled",
+                "Camera tracking is unavailable. Move the lens with the mouse "
+                "or a finger on the touchscreen. Use Settings → Apply to retry "
+                "the camera; head tracking resumes when it is ready.",
+            )
+
+    def _exit_pointer_fallback(self) -> None:
+        if not self._pointer_fallback:
+            return
+        self._pointer_fallback = False
+        self._fallback_reason = ""
+        self.engine.set_pointer_fallback(False)
+        if self.model is not None:
+            self.engine.set_model(self.model)
+        if self.settings.lens_visible:
+            if not self.overlay.isVisible():
+                self.overlay.show()
+            self.overlay.raise_()
+        self.settings_window.refresh_status()
+        self._sync_tray_menu()
+
+    def _check_camera_fallback(self) -> None:
+        if self._quitting or self.demo or self._pointer_fallback:
+            return
+        if self.tracker is None or self.tracker.is_ready:
+            return
+        if self.tracker.error_text:
+            reason = self.tracker.error_text
+        elif not self.tracker.isRunning():
+            reason = "The camera stopped before it became ready."
+        else:
+            reason = "The camera did not become ready in time."
+        self._enter_pointer_fallback(reason)
+
+    def _on_tracker_ready(self, ready: bool) -> None:
+        if self._quitting or not ready or not self._pointer_fallback:
+            return
+        if (
+            self.model is not None
+            and self.model.control_mode == self.settings.control_mode
+        ):
+            self._exit_pointer_fallback()
+            follows = "head" if self.model.control_mode == "head" else "eyes"
+            self._notify(
+                "Camera ready",
+                f"Camera tracking resumed. The lens follows your {follows} again.",
+            )
+        else:
+            # The camera works now, but there is no calibration for this mode.
+            # Keep pointer control until the user calibrates.
+            self._fallback_reason = ""
+            self.settings_window.refresh_status()
+            self._sync_tray_menu()
 
     # --------------------------------------------------------------- camera
     def _restart_camera(self, index: int) -> None:
@@ -841,8 +984,12 @@ class EyeLensApp(QObject):
         print(f"eyeLens camera: {message}", file=sys.stderr)
         if self._quitting:
             return
-        self._notify("Camera error", message, warning=True)
-        self.settings_window.refresh_status()
+        if self._pointer_fallback:
+            self._fallback_reason = message
+            self.settings_window.refresh_status()
+            self._sync_tray_menu()
+            return
+        self._enter_pointer_fallback(message)
 
     def _on_capture_error(self, message: str) -> None:
         print(f"eyeLens capture: {message}", file=sys.stderr)
@@ -879,7 +1026,8 @@ class EyeLensApp(QObject):
                     self.model = None
                     self._calibration_invalid = True
                     self.engine.set_model(None)
-                    self.overlay.hide()
+                    if not self._pointer_fallback:
+                        self.overlay.hide()
                     self._notify(
                         "Display changed",
                         "Recalibrate eyeLens for the new display layout.",

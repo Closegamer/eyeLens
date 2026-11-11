@@ -40,6 +40,7 @@ class GazeEngine(QObject):
         self.screen = screen
         self.tracker = tracker
         self.demo = bool(demo)
+        self._pointer_fallback = False
         self.settings = settings or Settings()
         self.model: GazeModel | None = None
         self._filter = PointFilter()
@@ -57,7 +58,7 @@ class GazeEngine(QObject):
     # ----------------------------------------------------------------- config
     def _configure_filter(self) -> None:
         cutoff, beta = smoothing_to_cutoff(self.settings.smoothing)
-        if self.head_control:
+        if self.head_control and not self._pointer_fallback:
             # Head landmarks are much less jittery than irises, so the same
             # slider value can afford a shorter lag.  Without this, aiming the
             # lens with the head feels noticeably behind the movement.
@@ -74,6 +75,31 @@ class GazeEngine(QObject):
             self._last_good = 0.0
             self._last_seq = -1
 
+    def set_pointer_fallback(self, enabled: bool) -> None:
+        """Follow the mouse/touch pointer instead of the camera.
+
+        Used when no camera is available.  The switch is deliberately
+        calibration-free: the pointer is already in absolute screen
+        coordinates.  Windows promotes touchscreen input to pointer moves, so
+        the same path serves mouse and finger control.
+        """
+        enabled = bool(enabled)
+        if enabled == self._pointer_fallback:
+            return
+        self._pointer_fallback = enabled
+        self._filter.reset()
+        self._configure_filter()
+        self._current = None
+        self._last_good = 0.0
+        self._last_seq = -1
+        if enabled:
+            self._face_found = True
+            self._openness = 1.0
+
+    @property
+    def pointer_fallback(self) -> bool:
+        return self._pointer_fallback
+
     def apply_settings(self, settings: Settings) -> None:
         self.settings = settings
         self._configure_filter()
@@ -87,7 +113,7 @@ class GazeEngine(QObject):
 
     # ------------------------------------------------------------------- poll
     def poll(self) -> None:
-        if self.demo:
+        if self.demo or self._pointer_fallback:
             pos = QCursor.pos()
             self._current = (float(pos.x()), float(pos.y()))
             self._last_good = time.monotonic()
@@ -158,7 +184,9 @@ class GazeEngine(QObject):
 
     @property
     def eyes_open(self) -> bool:
-        if self.model is not None and self.model.control_mode == "head":
+        if self._pointer_fallback or (
+            self.model is not None and self.model.control_mode == "head"
+        ):
             return True
         return self._openness >= (self.model.openness_threshold if self.model else 0.08)
 
@@ -169,6 +197,8 @@ class GazeEngine(QObject):
     def state_text(self) -> str:
         if self.demo:
             return "Mouse demo"
+        if self._pointer_fallback:
+            return "Mouse / touch"
         if self.model is None:
             return "Not calibrated"
         if self.screen and self.tracker is None:
@@ -184,7 +214,7 @@ class GazeEngine(QObject):
         return "Head tracking" if self.head_control else "Eye tracking"
 
     def tracking_live(self) -> bool:
-        if self.demo:
+        if self.demo or self._pointer_fallback:
             return True
         return (
             self.model is not None

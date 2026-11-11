@@ -26,6 +26,9 @@ settings as a fallback.
 
 - **Webcam head tracking** — move or turn your head to move the lens. No
   special hardware, no IR tracker, no cloud.
+- **Mouse / touch fallback** — if no camera is available, the lens
+  automatically follows the mouse, or a finger on a touchscreen, with no
+  calibration required. Camera tracking resumes when the camera is back.
 - **Guided 25-point calibration + 9-point accuracy check** — about 45 seconds,
   saveable and reusable. The result screen shows the error measured on the
   independent check points.
@@ -83,7 +86,9 @@ Try the lens without a camera first:
 .\.venv\Scripts\python.exe -m eyelens --demo
 ```
 
-In demo mode the lens follows the mouse pointer instead of your head.
+In demo mode the lens follows the mouse pointer instead of your head. A normal
+launch also falls back to this pointer behaviour automatically when no camera
+can be opened.
 
 ## First calibration
 
@@ -110,6 +115,12 @@ at each dot with your eyes only. For every dot, hold still for a moment, then
 slowly move your head a little left and right while keeping your eyes on the
 dot. That second part teaches the optional head-position correction.
 
+If eyeLens cannot open a camera, it does not leave you without a lens: it
+switches to **Pointer mode**, follows the mouse or a finger on the touchscreen,
+and shows **Mouse / touch** in the status. There is nothing to calibrate in that
+mode. Connect or free the camera, then press **Apply** next to the camera index
+to retry; head tracking resumes automatically once the camera is ready.
+
 If the lens is accurate overall but slightly off in specific spots, you do not
 need to recalibrate: press `Ctrl+Alt+D`, drag the lens to where you are looking,
 and release. Repeat for other regions. Corrections are saved with the
@@ -133,7 +144,8 @@ Everything is also available from the tray icon and the settings window:
 
 - **Control** — **Head** (default): move or turn your head to move the lens.
   **Eyes**: follow your gaze. Switching mode invalidates the current
-  calibration; calibrate again in the new mode.
+  calibration; calibrate again in the new mode. If the camera is unavailable,
+  the lens falls back to **Mouse / touch** automatically.
 - **Shape** — round, square, or wide. The size slider sets the height; a wide
   lens is 1.6× wider.
 - **Size** — lens height in logical pixels, up to 1200.
@@ -162,6 +174,7 @@ webcam ──► MediaPipe Face Landmarker (478 landmarks)
             trained on 25 screen targets with grouped leave-one-point-out
             cross-validation; a separate 9-point check measures real error
        ──► 1€ filter + loss handling
+       ──► if no camera: follow the global pointer (mouse / touch)
        ──► lens position (screen logical pixels)
        ──► padded 30 fps screen capture around the lens
        ──► always-on-top click-through Qt overlay
@@ -223,8 +236,11 @@ A few implementation details that matter:
 ## Troubleshooting
 
 **The camera cannot be opened.**
-Check Windows *Settings → Privacy & security → Camera*, close other apps that use
-the webcam, then try another camera index in the settings window.
+eyeLens automatically switches to **Mouse / touch** pointer control, so the
+lens still works. To restore head tracking, check Windows *Settings → Privacy &
+security → Camera*, close other apps that use the webcam, choose the right
+camera index, and press **Apply**. The status changes back to **Head tracking**
+once the camera is ready and a calibration exists.
 
 **Calibration never starts.**
 Your face must be visible in the preview. Improve lighting, remove backlight,
