@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import contextlib
+import ctypes
+import platform
 import threading
 from typing import ClassVar
 
@@ -19,6 +21,9 @@ class HotkeyManager(QObject):
     zoom_out = Signal()
     size_up = Signal()
     size_down = Signal()
+    #: Horizontal and vertical wheel deltas for manual lens fine tuning.
+    trim_lens = Signal(int, int)
+    reset_trim = Signal()
     error = Signal(str)
 
     HOTKEYS: ClassVar[dict[str, str]] = {
@@ -31,11 +36,13 @@ class HotkeyManager(QObject):
         "<ctrl>+<alt>+-": "zoom_out",
         "<ctrl>+<alt>+]": "size_up",
         "<ctrl>+<alt>+[": "size_down",
+        "<ctrl>+<alt>+0": "reset_trim",
     }
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._listener = None
+        self._mouse_listener = None
         self._lock = threading.Lock()
 
     def start(self) -> None:
@@ -56,6 +63,41 @@ class HotkeyManager(QObject):
         except Exception as exc:  # pragma: no cover - platform dependent
             self.error.emit(f"Global hotkeys are unavailable: {exc}")
 
+        try:
+            from pynput import mouse
+
+            mouse_listener = mouse.Listener(on_scroll=self._on_scroll)
+            mouse_listener.daemon = True
+            mouse_listener.start()
+            with self._lock:
+                self._mouse_listener = mouse_listener
+        except Exception as exc:  # pragma: no cover - platform dependent
+            self.error.emit(f"Global mouse wheel is unavailable: {exc}")
+
+    @staticmethod
+    def _ctrl_alt_down() -> bool:
+        if platform.system() != "Windows":
+            return False
+        try:
+            user32 = ctypes.windll.user32
+            vk_control = 0x11
+            vk_menu = 0x12  # Alt
+            return bool(user32.GetAsyncKeyState(vk_control) & 0x8000) and bool(
+                user32.GetAsyncKeyState(vk_menu) & 0x8000
+            )
+        except Exception:  # pragma: no cover - Windows API dependent
+            return False
+
+    def _on_scroll(self, _x, _y, dx, dy) -> None:
+        """Ctrl+Alt+wheel = nudge the lens; plain wheel is left alone."""
+        if not self._ctrl_alt_down():
+            return
+        dx = int(dx)
+        dy = int(dy)
+        if dx or dy:
+            with contextlib.suppress(Exception):
+                self.trim_lens.emit(dx, dy)
+
     def _dispatch(self, name: str) -> None:
         with contextlib.suppress(Exception):
             getattr(self, name).emit()
@@ -63,7 +105,10 @@ class HotkeyManager(QObject):
     def stop(self) -> None:
         with self._lock:
             listener = self._listener
+            mouse_listener = self._mouse_listener
             self._listener = None
-        if listener is not None:
-            with contextlib.suppress(Exception):
-                listener.stop()
+            self._mouse_listener = None
+        for item in (listener, mouse_listener):
+            if item is not None:
+                with contextlib.suppress(Exception):
+                    item.stop()

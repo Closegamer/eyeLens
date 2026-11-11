@@ -144,6 +144,10 @@ class GazeEngine(QObject):
         except (ValueError, FloatingPointError):
             return
 
+        # Manual Ctrl+Alt+wheel trim, applied only to camera-driven modes.
+        predicted_x = prediction.x + float(self.settings.trim_x)
+        predicted_y = prediction.y + float(self.settings.trim_y)
+
         now = time.monotonic()
         width = self.screen.width
         height = self.screen.height
@@ -151,16 +155,16 @@ class GazeEngine(QObject):
         margin_y = height * 0.18
         if not (
             self.screen.left - margin_x
-            <= prediction.x
+            <= predicted_x
             <= self.screen.left + width + margin_x
             and self.screen.top - margin_y
-            <= prediction.y
+            <= predicted_y
             <= self.screen.top + height + margin_y
         ):
             return
 
-        x = min(max(prediction.x, self.screen.left), self.screen.left + width)
-        y = min(max(prediction.y, self.screen.top), self.screen.top + height)
+        x = min(max(predicted_x, self.screen.left), self.screen.left + width)
+        y = min(max(predicted_y, self.screen.top), self.screen.top + height)
 
         if self._current is None or now - self._last_good > 1.0:
             self._filter.reset((x, y))

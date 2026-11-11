@@ -16,6 +16,8 @@ def test_settings_normalization() -> None:
         opacity=5,
         camera_index=-3,
         control_mode="banana",
+        trim_x=9999,
+        trim_y=-9999,
     )
     normalized = settings.normalized()
     assert normalized.diameter == Settings.DIAMETER_RANGE[1]
@@ -24,6 +26,8 @@ def test_settings_normalization() -> None:
     assert normalized.opacity == 1.0
     assert normalized.camera_index == 0
     assert normalized.control_mode == "head"
+    assert normalized.trim_x == Settings.TRIM_RANGE
+    assert normalized.trim_y == -Settings.TRIM_RANGE
 
 
 def test_settings_control_mode_roundtrip(tmp_path) -> None:

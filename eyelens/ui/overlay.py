@@ -593,10 +593,34 @@ class LensOverlay(QWidget):
             QCursor.setPos(self._saved_cursor)
             QTimer.singleShot(60, self._finish_click_through)
 
+    @staticmethod
+    def _ctrl_alt_down() -> bool:
+        if platform.system() != "Windows":
+            return False
+        try:
+            user32 = ctypes.windll.user32
+            return bool(user32.GetAsyncKeyState(0x11) & 0x8000) and bool(
+                user32.GetAsyncKeyState(0x12) & 0x8000
+            )
+        except Exception:  # pragma: no cover - Windows API dependent
+            return False
+
+    def _trim_active(self) -> bool:
+        return (
+            not self.engine.demo
+            and not self.engine.pointer_fallback
+            and self.engine.model is not None
+        )
+
     def wheelEvent(self, event) -> None:
         local = self._local_point(event)
         if not self._lens_contains(local):
             event.ignore()
+            return
+        if self._trim_active() and self._ctrl_alt_down():
+            # The global Ctrl+Alt+wheel listener is nudging the lens; do not
+            # also scroll the app underneath.
+            event.accept()
             return
         angle = event.angleDelta()
         if angle.y():

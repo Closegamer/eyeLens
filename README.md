@@ -36,6 +36,9 @@ settings as a fallback.
 - **Edge-to-edge** — the lens can reach the screen corners and the taskbar.
   At a border the lens is partially clipped, which is what lets it magnify the
   very last pixels instead of stopping half a diameter early.
+- **Wheel fine-tune** — hold `Ctrl+Alt` and scroll to nudge the lens toward
+  where you are actually looking, 10 px per notch. The trim is saved; reset it
+  with `Ctrl+Alt+0` or a new calibration.
 - **Guided 25-point calibration + 9-point accuracy check** — about 45 seconds,
   saveable and reusable. The result screen shows the error measured on the
   independent check points.
@@ -144,6 +147,8 @@ calibration.
 | `Ctrl + Alt + F` | Freeze / unfreeze the lens position |
 | `Ctrl + Alt + C` | Start calibration |
 | `Ctrl + Alt + D` | Correct / drag the lens position |
+| `Ctrl + Alt + Wheel` | Fine-tune lens position up/down/left/right |
+| `Ctrl + Alt + 0` | Reset fine-tune trim |
 | `Ctrl + Alt + B` | Big lens on / off |
 | `Ctrl + Alt + =` / `Ctrl + Alt + -` | Zoom in / out |
 | `Ctrl + Alt + ]` / `Ctrl + Alt + [` | Grow / shrink the lens |
@@ -170,6 +175,10 @@ Everything is also available from the tray icon and the settings window:
   position and then restores the pointer. Outside the lens, input is passed
   through untouched. Dragging inside the lens is not remapped yet; use the
   wheel or click-drag outside the lens for now.
+- **Fine trim** — hold `Ctrl+Alt` and turn the wheel to nudge the
+  camera-driven lens up/down (or sideways with a horizontal wheel), 10 px per
+  notch. It is saved and survives restarts. `Ctrl+Alt+0` or **Reset trim**
+  clears it; a new calibration also resets it.
 - **Fix position** — turns the lens into a draggable handle; drop it where you
   are looking and the model learns that correction. Also `Ctrl+Alt+D`.
 - **Camera** — choose a different webcam index and apply it. Changing the camera
@@ -269,6 +278,11 @@ Recalibrate. Aim your head at each dot and hold still while the ring fills.
 Increase **Smoothing** if the lens jitters or moves too quickly; decrease it if
 it feels sluggish. Head control needs a stable seating position: a large
 posture change after calibration moves the lens.
+
+**The lens is consistently above or below where I look.**
+Hold `Ctrl+Alt` and scroll the wheel toward the target: wheel up moves the lens
+up, wheel down moves it down. The trim is saved. Press `Ctrl+Alt+0` to clear it.
+For local errors, use `Ctrl+Alt+D` instead.
 
 **The lens is still slightly off in one area.**
 Press `Ctrl+Alt+D`, drag the small handle to where you are actually looking or

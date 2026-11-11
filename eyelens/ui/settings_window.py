@@ -185,6 +185,7 @@ class SettingsWindow(QWidget):
     correct_requested = Signal()
     big_lens_requested = Signal()
     camera_restart_requested = Signal(int)
+    reset_trim_requested = Signal()
     quit_requested = Signal()
     hidden_to_tray = Signal()
 
@@ -250,7 +251,7 @@ class SettingsWindow(QWidget):
         titles.addWidget(title)
         titles.addWidget(subtitle)
         header.addLayout(titles, 1)
-        version = QLabel("v0.10")
+        version = QLabel("v0.11")
         version.setObjectName("badge")
         header.addWidget(version, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(header)
@@ -401,6 +402,13 @@ class SettingsWindow(QWidget):
         options.addWidget(self.ring_checkbox)
         options.addWidget(self.osd_checkbox)
         options.addStretch(1)
+        reset_trim = QPushButton("Reset trim")
+        reset_trim.setObjectName("link")
+        reset_trim.setToolTip(
+            "Clear the manual Ctrl+Alt+wheel position trim (Ctrl+Alt+0)."
+        )
+        reset_trim.clicked.connect(self.reset_trim_requested.emit)
+        options.addWidget(reset_trim)
         reset = QPushButton("Reset appearance")
         reset.setObjectName("link")
         reset.clicked.connect(self._reset_appearance)
@@ -461,6 +469,8 @@ class SettingsWindow(QWidget):
             ("Ctrl + Alt + F", "Freeze / unfreeze"),
             ("Ctrl + Alt + C", "Calibrate"),
             ("Ctrl + Alt + D", "Correct / drag the lens"),
+            ("Ctrl + Alt + Wheel", "Fine-tune lens position"),
+            ("Ctrl + Alt + 0", "Reset fine-tune trim"),
             ("Ctrl + Alt + B", "Big lens on / off"),
             ("Ctrl + Alt + = / -", "Zoom in / out"),
             ("Ctrl + Alt + ] / [", "Grow / shrink lens"),

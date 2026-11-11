@@ -135,6 +135,9 @@ class Settings:
     lens_visible: bool = True
     camera_index: int = 0
     control_mode: str = "head"
+    # Manual fine trim added to camera-driven predictions, in logical pixels.
+    trim_x: int = 0
+    trim_y: int = 0
 
     DIAMETER_RANGE = (120, 1200)
     SHAPE_OPTIONS = ("round", "square", "wide")
@@ -143,6 +146,8 @@ class Settings:
     ZOOM_RANGE = (1.0, 6.0)
     SMOOTHING_RANGE = (0.0, 1.0)
     OPACITY_RANGE = (0.4, 1.0)
+    TRIM_RANGE = 1200
+    TRIM_STEP = 10
 
     @classmethod
     def load(cls, path: Path | None = None) -> Settings:
@@ -182,6 +187,12 @@ class Settings:
         self.smoothing = _clamp(float(self.smoothing), *self.SMOOTHING_RANGE)
         self.opacity = _clamp(float(self.opacity), *self.OPACITY_RANGE)
         self.camera_index = int(_clamp(float(self.camera_index), 0, 9))
+        self.trim_x = int(
+            _clamp(float(self.trim_x), -self.TRIM_RANGE, self.TRIM_RANGE)
+        )
+        self.trim_y = int(
+            _clamp(float(self.trim_y), -self.TRIM_RANGE, self.TRIM_RANGE)
+        )
         self.show_ring = bool(self.show_ring)
         self.show_osd = bool(self.show_osd)
         self.lens_visible = bool(self.lens_visible)

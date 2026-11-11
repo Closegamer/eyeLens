@@ -104,6 +104,7 @@ class EyeLensApp(QObject):
         self.settings_window.camera_restart_requested.connect(self._restart_camera)
         self.settings_window.correct_requested.connect(self.correct_lens)
         self.settings_window.big_lens_requested.connect(self.toggle_big_lens)
+        self.settings_window.reset_trim_requested.connect(self._reset_trim)
         self.settings_window.quit_requested.connect(self.quit)
         self.settings_window.hidden_to_tray.connect(self._on_hidden_to_tray)
 
@@ -131,6 +132,8 @@ class EyeLensApp(QObject):
         self._hotkeys.zoom_out.connect(lambda: self.adjust_zoom(-0.25))
         self._hotkeys.size_up.connect(lambda: self.adjust_size(20))
         self._hotkeys.size_down.connect(lambda: self.adjust_size(-20))
+        self._hotkeys.trim_lens.connect(self._on_trim_lens)
+        self._hotkeys.reset_trim.connect(self._reset_trim)
         self._hotkeys.error.connect(self._on_hotkey_error)
         self._hotkeys.start()
 
@@ -380,6 +383,11 @@ class EyeLensApp(QObject):
                 detail += (
                     f" Calibrated with camera {camera_used}; recalibrate if "
                     "accuracy drops."
+                )
+            if self.settings.trim_x or self.settings.trim_y:
+                detail += (
+                    f" Trim {self.settings.trim_x:+d}, "
+                    f"{self.settings.trim_y:+d} px."
                 )
             info.calibration_detail = detail
             info.can_calibrate = (
@@ -696,9 +704,15 @@ class EyeLensApp(QObject):
                 warning=True,
             )
             return
+        # The displayed lens already includes the manual trim; the learned
+        # correction is applied before that trim.
+        model_target = (
+            target[0] - self.settings.trim_x,
+            target[1] - self.settings.trim_y,
+        )
         try:
             new_model = self.model.with_correction(
-                features, target, head_pose
+                features, model_target, head_pose
             )
         except (ValueError, FloatingPointError) as exc:
             print(f"eyeLens: correction failed: {exc}", file=sys.stderr)
@@ -752,6 +766,43 @@ class EyeLensApp(QObject):
         self.settings_window.sync_from_settings()
         self._save_timer.start()
         self._sync_tray_menu()
+
+    # -------------------------------------------------------- position trim
+    def _on_trim_lens(self, dx: int, dy: int) -> None:
+        """Ctrl+Alt+wheel: nudge the camera-driven lens position."""
+        if (
+            self.demo
+            or self._pointer_fallback
+            or self.model is None
+            or self.calibration_window is not None
+        ):
+            return
+        step = Settings.TRIM_STEP
+        limit = Settings.TRIM_RANGE
+        self.settings.trim_x = max(
+            -limit, min(limit, self.settings.trim_x + int(dx) * step)
+        )
+        # Screen y grows downwards; a wheel-up event has dy > 0 and should
+        # move the lens towards the top of the screen.
+        self.settings.trim_y = max(
+            -limit, min(limit, self.settings.trim_y - int(dy) * step)
+        )
+        self._save_timer.start()
+        self.overlay.flash_osd(
+            f"Trim  {self.settings.trim_x:+d}, "
+            f"{self.settings.trim_y:+d} px",
+            duration=1.4,
+        )
+
+    def _reset_trim(self) -> None:
+        if self.demo or self.calibration_window is not None:
+            return
+        changed = self.settings.trim_x != 0 or self.settings.trim_y != 0
+        self.settings.trim_x = 0
+        self.settings.trim_y = 0
+        if changed:
+            self._save_timer.start()
+            self.overlay.flash_osd("Lens trim reset", duration=1.4)
 
     # ----------------------------------------------------------- calibration
     def start_calibration(self) -> None:
@@ -829,6 +880,8 @@ class EyeLensApp(QObject):
         self.model = model
         self._calibration_invalid = False
         self.settings.control_mode = model.control_mode
+        self.settings.trim_x = 0
+        self.settings.trim_y = 0
         self.engine.screen = self.screen_data
         self.engine.set_model(model)
         if self._pointer_fallback:
