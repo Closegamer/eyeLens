@@ -144,7 +144,15 @@ class LensOverlay(QWidget):
 
     def toggle_locked(self) -> None:
         self._locked = not self._locked
-        self.flash_osd("Lens locked" if self._locked else "Lens follows gaze")
+        follows = (
+            "head"
+            if self.engine.model is not None
+            and self.engine.model.control_mode == "head"
+            else "gaze"
+        )
+        self.flash_osd(
+            "Lens locked" if self._locked else f"Lens follows {follows}"
+        )
         self._update_paint()
 
     @property
@@ -253,7 +261,14 @@ class LensOverlay(QWidget):
         if self._handle is not None:
             self._handle.hide()
         target = self._global_center()
-        self.flash_osd("Hold your gaze on the lens…", duration=1.2)
+        head_control = (
+            self.engine.model is not None
+            and self.engine.model.control_mode == "head"
+        )
+        self.flash_osd(
+            "Keep facing the lens…" if head_control else "Hold your gaze on the lens…",
+            duration=1.2,
+        )
         self.correction_committed.emit(target.x(), target.y())
 
     def _cancel_from_handle(self) -> None:

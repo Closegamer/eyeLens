@@ -9,13 +9,30 @@ from eyelens.config import (
 
 
 def test_settings_normalization() -> None:
-    settings = Settings(diameter=5000, zoom=99, smoothing=-1, opacity=5, camera_index=-3)
+    settings = Settings(
+        diameter=5000,
+        zoom=99,
+        smoothing=-1,
+        opacity=5,
+        camera_index=-3,
+        control_mode="banana",
+    )
     normalized = settings.normalized()
     assert normalized.diameter == Settings.DIAMETER_RANGE[1]
     assert normalized.zoom == Settings.ZOOM_RANGE[1]
     assert normalized.smoothing == 0.0
     assert normalized.opacity == 1.0
     assert normalized.camera_index == 0
+    assert normalized.control_mode == "head"
+
+
+def test_settings_control_mode_roundtrip(tmp_path) -> None:
+    path = tmp_path / "settings.json"
+    original = Settings(control_mode="eyes")
+    original.save(path)
+    loaded = Settings.load(path)
+    assert loaded.control_mode == "eyes"
+    assert Settings().control_mode == "head"
 
 
 def test_settings_roundtrip(tmp_path) -> None:

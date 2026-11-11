@@ -172,6 +172,14 @@ class EyeLensApp(QObject):
                 file=sys.stderr,
             )
             return None
+        if model.control_mode != self.settings.control_mode:
+            self._calibration_invalid = True
+            print(
+                "eyeLens: existing calibration uses a different control mode; "
+                "recalibration required.",
+                file=sys.stderr,
+            )
+            return None
         return model
 
     def _create_tracker(self, camera_index: int | None = None) -> EyeTracker:
@@ -262,7 +270,7 @@ class EyeLensApp(QObject):
             info.calibration_level = "muted"
             info.calibration_detail = (
                 "Demo mode: the lens follows the mouse. Start without --demo "
-                "to use eye tracking."
+                "to use head tracking."
             )
             info.can_calibrate = False
             info.can_correct = False
@@ -290,6 +298,8 @@ class EyeLensApp(QObject):
         info.gaze_text = state
         info.gaze_level = {
             "Tracking": "ok",
+            "Head tracking": "ok",
+            "Eye tracking": "ok",
             "Mouse demo": "accent",
             "Face not found": "warn",
             "Eyes closed": "warn",
@@ -311,6 +321,7 @@ class EyeLensApp(QObject):
             else:
                 label = "Accuracy"
             detail = (
+                f"{self.model.control_label} control · "
                 f"{label} ±{self.model.error_rmse:.0f} px · "
                 f"{self.model.metrics.n_points} points · "
                 f"{self.model.metrics.n_samples} samples."
@@ -337,11 +348,18 @@ class EyeLensApp(QObject):
             info.calibration_level = "bad"
             if self._calibration_invalid:
                 info.calibration_detail = (
-                    "The display or screen layout changed. Calibrate again for "
-                    "this screen."
+                    "The display, screen layout, or control mode changed. "
+                    "Calibrate again for the current setup."
                 )
             elif tracker is not None and tracker.error_text:
                 info.calibration_detail = tracker.error_text
+            elif self.settings.control_mode == "head":
+                info.calibration_detail = (
+                    "Aim your head at 25 dots plus 9 accuracy-check dots for "
+                    "about 45 seconds. Turn or move your head to face each dot, "
+                    "then hold still. eyeLens learns how your head maps to this "
+                    "screen."
+                )
             else:
                 info.calibration_detail = (
                     "Look at 25 dots plus 9 accuracy-check dots for about 80 "
@@ -384,6 +402,27 @@ class EyeLensApp(QObject):
     # -------------------------------------------------------------- settings
     def _on_settings_changed(self) -> None:
         self.settings.normalized()
+        if (
+            self.model is not None
+            and self.model.control_mode != self.settings.control_mode
+        ):
+            # A calibration is tied to the features it was fitted on.  Keeping
+            # an eye calibration while the user switches to head control would
+            # silently predict from the wrong signal.
+            self.model = None
+            self._calibration_invalid = True
+            self.engine.set_model(None)
+            if self.overlay.correction_active:
+                self.overlay.cancel_correction()
+            self.overlay.hide()
+            label = "head" if self.settings.control_mode == "head" else "eye"
+            self._notify(
+                "Recalibrate for " + label + " control",
+                f"The saved calibration was made for the other control mode. "
+                f"Run calibration again to use {label} control.",
+            )
+            self.settings_window.refresh_status()
+            self._sync_tray_menu()
         if (
             self._big_previous_diameter is not None
             and abs(self.settings.diameter - self._big_diameter()) > 1
@@ -575,16 +614,28 @@ class EyeLensApp(QObject):
             self.overlay.finish_correction(False)
             return
         features = self.tracker.recent_features(
-            seconds=0.5, since=self._correction_release_at
+            seconds=0.5,
+            since=self._correction_release_at,
+            require_open=self.model.control_mode != "head",
         )
-        head_pose = self.tracker.recent_head_pose(
-            seconds=0.5, since=self._correction_release_at
+        head_pose = (
+            self.tracker.recent_head_pose(
+                seconds=0.5, since=self._correction_release_at
+            )
+            if self.model.control_mode == "eyes"
+            else None
         )
         if features is None:
             self.overlay.finish_correction(False)
             self._notify(
                 "Correction not learned",
-                "Keep your face visible and your eyes on the lens, then try again.",
+                (
+                    "Keep your face visible and your head facing the lens, "
+                    "then try again."
+                    if self.model.control_mode == "head"
+                    else "Keep your face visible and your eyes on the lens, "
+                    "then try again."
+                ),
                 warning=True,
             )
             return
@@ -678,7 +729,11 @@ class EyeLensApp(QObject):
 
         self.overlay.hide()
         try:
-            window = CalibrationWindow(self.tracker, self.screen)
+            window = CalibrationWindow(
+                self.tracker,
+                self.screen,
+                control_mode=self.settings.control_mode,
+            )
         except Exception as exc:  # pragma: no cover
             print(f"eyeLens: could not open calibration: {exc}", file=sys.stderr)
             self._notify("Calibration error", str(exc))
@@ -716,6 +771,7 @@ class EyeLensApp(QObject):
             self._notify("Could not save calibration", str(exc))
         self.model = model
         self._calibration_invalid = False
+        self.settings.control_mode = model.control_mode
         self.engine.screen = self.screen_data
         self.engine.set_model(model)
         self.settings.lens_visible = True
@@ -730,9 +786,13 @@ class EyeLensApp(QObject):
         self.settings_window.refresh_status()
         self._sync_tray_menu()
         self._save_settings()
+        follows = (
+            "head" if model.control_mode == "head" else "eyes"
+        )
         self._notify(
             "Calibration complete",
-            f"Accuracy: ±{model.error_rmse:.0f} px. The lens now follows your eyes.",
+            f"Accuracy: ±{model.error_rmse:.0f} px. The lens now follows your "
+            f"{follows}.",
         )
         if self._settings_visible_once:
             self.settings_window.show_window()

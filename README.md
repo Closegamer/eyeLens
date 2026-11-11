@@ -1,12 +1,12 @@
 # eyeLens
 
-**A click-through magnifying lens that follows your eyes.**
+**A click-through magnifying lens that follows your head.**
 
-eyeLens uses an ordinary webcam to estimate where you are looking on screen, then
+eyeLens uses an ordinary webcam to estimate where your head is pointing, then
 draws a circular, always-on-top magnifier over that spot. The lens can be any
 size from 120 to 1200 px high (wide lenses are 1.6× wider) and zoom from 1×
 to 6×. A short guided calibration
-teaches it how *your* eyes map to *your* screen.
+teaches it how *your* head maps to *your* screen.
 
 ![eyeLens settings](docs/settings.png)
 
@@ -14,20 +14,25 @@ teaches it how *your* eyes map to *your* screen.
 
 Sometimes you need a closer look without changing the zoom of the app you are
 using, moving a mouse, or interrupting what you are doing. eyeLens magnifies the
-area you are already looking at. Freeze the lens with one hotkey when you want
-to read, then unfreeze it and continue working.
+area you are already facing. Freeze the lens with one hotkey when you want to
+read, then unfreeze it and continue working.
+
+Head control is the default because head pose is far more stable than iris
+position: there is no saccade jitter, blinks do not interrupt it, and small
+tracking errors move the lens by less. Eye control remains available in the
+settings as a fallback.
 
 ## Features
 
-- **Webcam eye tracking** — no special hardware, no IR tracker, no cloud.
-- **Guided 25-point calibration + 9-point accuracy check** — about 80 seconds,
+- **Webcam head tracking** — move or turn your head to move the lens. No
+  special hardware, no IR tracker, no cloud.
+- **Guided 25-point calibration + 9-point accuracy check** — about 45 seconds,
   saveable and reusable. The result screen shows the error measured on the
   independent check points.
-- **Zoomed eye preview** — calibration shows a large close-up of both eyes plus
-  a small whole-face inset, so positioning and iris tracking are easy to check.
-- **Head-pose compensation** — MediaPipe’s 6-DOF face transform is used for an
-  optional global correction. When enabled, moving your head recalculates the
-  mapping so the lens keeps following the same screen point.
+- **Whole-face calibration preview** — check your framing easily; no iris
+  landmarks are needed for head control.
+- **Optional eye control** — switch **Control** to **Eyes** in the settings if
+  you prefer gaze tracking. Each mode needs its own calibration.
 - **Variable lens** — 120–1200 px high, round / square / wide (1.6× wider),
   1×–6× magnification, adjustable opacity.
 - **Big lens on demand** — press `Ctrl+Alt+B` for a screen-sized lens; press
@@ -78,30 +83,32 @@ Try the lens without a camera first:
 .\.venv\Scripts\python.exe -m eyelens --demo
 ```
 
-In demo mode the lens follows the mouse pointer instead of your eyes.
+In demo mode the lens follows the mouse pointer instead of your head.
 
 ## First calibration
 
 1. Launch eyeLens and sit comfortably in front of the webcam.
 2. Click **Calibrate now**. Keep your face fully visible and avoid backlighting.
-   The large **EYES** panel is a zoomed view of both eyes; the small **FACE**
-   inset shows the whole camera frame so you can check your framing.
-3. Look at each of the 25 dots **with your eyes only**. For every dot, hold still
-   for a moment, then slowly move your head a little left and right while keeping
-   your eyes on the dot. This second part teaches the head-position correction.
-   If the header says **“Head moved”**, return to your starting head position.
-   The dot turns into a progress ring while samples are collected.
+   The large **FACE** panel shows the camera frame so you can check your framing.
+3. **Aim your head** at each of the 25 dots: turn or move your head until you
+   are facing the dot, then hold still for a moment. Your eyes are not used for
+   control, so you can blink or look around freely. The dot turns into a
+   progress ring while samples are collected.
 4. After the 25th dot, eyeLens repeats a short 9-dot **accuracy check** on
    points it did not train on. This measures the real error instead of guessing.
 5. When the result appears, press **Enter** to keep the calibration or **R** to
-   try again. The checked error is shown in pixels. If a head-pose correction
-   improves the held-out check, the result also says **head pose**; that is the
-   layer that recalculates the mapping when your head moves.
-6. The lens appears and starts following your gaze.
+   try again. The checked error is shown in pixels.
+6. The lens appears and starts following your head.
 
-Calibration is personal and tied to the current screen geometry. Recalibrate if
-you move the camera, change the display resolution or scaling, or notice the
-lens drifting everywhere.
+Calibration is personal and tied to the current screen geometry and control
+mode. Recalibrate if you move the camera, change the display resolution or
+scaling, switch between Head and Eyes control, or notice the lens drifting
+everywhere.
+
+If you choose **Eyes** control in the settings, the protocol is different: look
+at each dot with your eyes only. For every dot, hold still for a moment, then
+slowly move your head a little left and right while keeping your eyes on the
+dot. That second part teaches the optional head-position correction.
 
 If the lens is accurate overall but slightly off in specific spots, you do not
 need to recalibrate: press `Ctrl+Alt+D`, drag the lens to where you are looking,
@@ -124,6 +131,9 @@ calibration.
 
 Everything is also available from the tray icon and the settings window:
 
+- **Control** — **Head** (default): move or turn your head to move the lens.
+  **Eyes**: follow your gaze. Switching mode invalidates the current
+  calibration; calibrate again in the new mode.
 - **Shape** — round, square, or wide. The size slider sets the height; a wide
   lens is 1.6× wider.
 - **Size** — lens height in logical pixels, up to 1200.
@@ -134,7 +144,7 @@ Everything is also available from the tray icon and the settings window:
 - **Smoothing** — higher is calmer and slower; lower is faster but jitterier.
 - **Opacity** — how strongly the lens covers the content underneath.
 - **Outline / On-screen HUD** — visual chrome and the small zoom/size badge.
-- **Freeze** — keeps the lens where it is while your eyes move.
+- **Freeze** — keeps the lens where it is while your head or eyes move.
 - **Fix position** — turns the lens into a draggable handle; drop it where you
   are looking and the model learns that correction. Also `Ctrl+Alt+D`.
 - **Camera** — choose a different webcam index and apply it. Changing the camera
@@ -143,17 +153,15 @@ Everything is also available from the tray icon and the settings window:
 ## How it works
 
 ```
-webcam ──► MediaPipe Face Landmarker (478 landmarks, both irises)
-       ──► 14 features in a roll-corrected eye frame
-            iris position in each eye, vergence, plus head/face diagnostics
-       ──► fitted model uses the 8 eye-in-head features
-            (raw head/face drift made held-out accuracy much worse)
-       ──► optional global head-pose correction from MediaPipe's 6-DOF face
-            transform; enabled only if it improves the 9 held-out points
-       ──► per-user hybrid model (eye-term polynomial + kernel-ridge residual)
+webcam ──► MediaPipe Face Landmarker (478 landmarks)
+       ──► 14 scale-invariant eye/head features
+       ──► head mode (default): fit the 6 head/face features
+            nose-vs-eye yaw/pitch, roll, eye-mid position, face size
+       ──► eye mode (optional): fit the 8 iris features instead
+       ──► per-user hybrid model (polynomial + kernel-ridge residual)
             trained on 25 screen targets with grouped leave-one-point-out
             cross-validation; a separate 9-point check measures real error
-       ──► 1€ filter + blink/loss handling
+       ──► 1€ filter + loss handling
        ──► lens position (screen logical pixels)
        ──► padded 30 fps screen capture around the lens
        ──► always-on-top click-through Qt overlay
@@ -161,34 +169,36 @@ webcam ──► MediaPipe Face Landmarker (478 landmarks, both irises)
 
 A few implementation details that matter:
 
-- The fitted model uses only the 8 eye-in-head features. Raw head/face
-  translation features are kept for diagnostics and for the live “head moved”
-  calibration warning; using them as predictors made held-out accuracy much
-  worse on real calibration data.
-- Each calibration dot has a stable-head part and a slow head-movement part.
-  The base eye-only model uses the stable frames; a global pose correction is
-  fitted on the moved frames' residuals and enabled only if it improves the
-  combined held-out error by at least 5% and 10 px. This is the layer that
-  recalculates the mapping when your head moves.
-- Calibration uses a predictable centre-out dot order and watches the head pose.
-  If you drift, it warns you but keeps collecting; the optional pose correction
-  can compensate for head movement afterwards.
+- Head control fits only the six gaze-independent head/face features. Iris
+  position is excluded completely, so moving your eyes does not move the lens
+  and blinks do not interrupt tracking.
+- Head calibration asks you to aim your head at each dot and hold still. There
+  is no eye-motion part and no head-pose correction layer: the head features
+  already are the control signal.
+- Eye control fits only the eight eye-in-head features. Raw head/face drift made
+  held-out accuracy much worse on real calibration data, so it stays out of the
+  eye model.
+- In eye mode each calibration dot has a stable-head part and a slow
+  head-movement part. A global pose correction is fitted on the moved frames'
+  residuals and enabled only if it improves the combined held-out error by at
+  least 5% and 10 px.
+- Calibration uses a predictable centre-out dot order. Eye mode also watches the
+  head pose and warns if you drift during the stable part.
 - Eye measurements are made in a rotated eye frame, so a tilted head does not
   fake vertical gaze or a blink.
 - Calibration keeps every stable frame from each target (usually several hundred
-  samples) and discards blink/outlier frames per target before fitting.
-- During calibration the camera preview crops a fixed-aspect region around both
-  eyes and upscales it, so the iris/eyelid landmarks are easy to see; a small
-  whole-face inset keeps framing visible.
-- The polynomial stage captures the global gaze trend; a kernel-ridge residual
-  stage captures the local nonlinearity the polynomial misses. The kernel stage
-  is only enabled when grouped cross-validation says it helps.
+  samples) and discards outlier frames per target before fitting.
+- During head calibration the preview shows the whole face; eye calibration
+  crops and upscales both eyes, with a small whole-face inset for framing.
+- The polynomial stage captures the global trend; a kernel-ridge residual stage
+  captures local nonlinearity. The kernel stage is only enabled when grouped
+  cross-validation says it helps.
 - The 9 accuracy-check points are never used to fit the primary model, so the
   error shown on the result screen is a real held-out measurement.
 - Mouse corrections are a local residual memory on top of the fitted model:
   each drag stores the difference between the drop point and the model's
-  prediction at the current gaze features. Nearby corrections blend with an RBF
-  weight, so a fix applies where you made it and decays elsewhere. No full
+  prediction at the current control features. Nearby corrections blend with an
+  RBF weight, so a fix applies where you made it and decays elsewhere. No full
   recalibration is needed.
 - Runtime predictions are clipped to the calibrated feature range, and the
   kernel residual is bounded, preventing a bad frame from throwing the lens
@@ -220,26 +230,27 @@ the webcam, then try another camera index in the settings window.
 Your face must be visible in the preview. Improve lighting, remove backlight,
 move closer to the camera, and make sure the correct camera is selected.
 
-**The EYES preview is black or not zoomed.**
-The zoomed view needs a detected face. Use the small FACE inset to centre your
-face, improve the lighting, and wait for the status pill to turn green.
+**The camera preview is black.**
+The preview needs a detected face. Centre your face in the camera, improve the
+lighting, and wait for the status pill to turn green.
 
 **The lens drifts or jumps.**
-Recalibrate. For each dot, hold still for the first part, then move your head
-slowly in the second part. Increase **Smoothing** if the lens jitters or moves
-too quickly; decrease it if it feels sluggish.
+Recalibrate. Aim your head at each dot and hold still while the ring fills.
+Increase **Smoothing** if the lens jitters or moves too quickly; decrease it if
+it feels sluggish. Head control needs a stable seating position: a large
+posture change after calibration moves the lens.
 
 **The lens is still slightly off in one area.**
-Press `Ctrl+Alt+D`, drag the small handle to where you are actually looking,
-and release. eyeLens stores a local correction and keeps it. Repeat in other
-screen regions if needed. Recalibrate to discard all corrections and start over.
+Press `Ctrl+Alt+D`, drag the small handle to where you are actually looking or
+facing, and release. eyeLens stores a local correction and keeps it. Repeat in
+other screen regions if needed. Recalibrate to discard all corrections and
+start over.
 
-**The lens drifts when I move my head.**
-Recalibrate. During each dot, hold still for the first part, then slowly move
-your head a little left and right while keeping your eyes on the dot. Calibration
-adds a global head-pose correction if it improves the combined held-out error by
-at least 5% and 10 px. When active, the status shows **head pose**. If it is not
-shown, the eye-only mapping was more accurate for your data.
+**The lens does not follow my eyes any more.**
+That is the default. Head control ignores iris position on purpose. Switch
+**Control** to **Eyes** in the settings and calibrate again if you want gaze
+control; each mode has its own calibration and the lens asks for a new one when
+you switch.
 
 **The lens shows a mirror image of itself.**
 This should not happen on Windows 10 2004+ / Windows 11. If you see a warning in
@@ -325,11 +336,12 @@ state machine is exercised with a fake tracker during development.
   Windows-specific.
 - Primary display only; the calibration and overlay target the primary screen.
 - One face at a time.
-- Webcam gaze estimation is approximate. Typical setups land in the
-  ±80–200 px range after calibration; lighting and camera quality matter more
-  than raw resolution.
-- The lens is circular. Rectangular/elliptical shapes, per-app profiles, and
-  dwell-to-freeze are natural next steps.
+- Webcam head tracking is approximate. Typical head-control setups should land
+  well under ±80 px after calibration; eye control is less precise (typically
+  ±80–200 px). Lighting and camera quality matter more than raw resolution.
+- Large posture changes (slouching, leaning back) after calibration shift the
+  mapping; recalibrate from the position you normally use.
+- Per-app profiles and dwell-to-freeze are natural next steps.
 
 ## License
 

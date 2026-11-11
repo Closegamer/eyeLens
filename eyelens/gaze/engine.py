@@ -43,8 +43,7 @@ class GazeEngine(QObject):
         self.settings = settings or Settings()
         self.model: GazeModel | None = None
         self._filter = PointFilter()
-        cutoff, beta = smoothing_to_cutoff(self.settings.smoothing)
-        self._filter.configure(cutoff, beta)
+        self._configure_filter()
         self._current: tuple[float, float] | None = None
         self._last_good = 0.0
         self._last_seq = -1
@@ -56,8 +55,19 @@ class GazeEngine(QObject):
         self._timer.start()
 
     # ----------------------------------------------------------------- config
+    def _configure_filter(self) -> None:
+        cutoff, beta = smoothing_to_cutoff(self.settings.smoothing)
+        if self.head_control:
+            # Head landmarks are much less jittery than irises, so the same
+            # slider value can afford a shorter lag.  Without this, aiming the
+            # lens with the head feels noticeably behind the movement.
+            cutoff *= 1.7
+            beta *= 1.4
+        self._filter.configure(cutoff, beta)
+
     def set_model(self, model: GazeModel | None, reset: bool = True) -> None:
         self.model = model
+        self._configure_filter()
         if reset:
             self._filter.reset()
             self._current = None
@@ -66,8 +76,7 @@ class GazeEngine(QObject):
 
     def apply_settings(self, settings: Settings) -> None:
         self.settings = settings
-        cutoff, beta = smoothing_to_cutoff(settings.smoothing)
-        self._filter.configure(cutoff, beta)
+        self._configure_filter()
 
     def recenter(self, x: float, y: float) -> None:
         """Start the filter at a known point after a mouse correction."""
@@ -97,7 +106,11 @@ class GazeEngine(QObject):
 
         if not snap.face_found or snap.features is None:
             return
-        if not self.model.is_eye_open(snap.openness):
+        # Head control keeps working through blinks and closed eyes; only the
+        # eye model needs an open-eye sample.
+        if self.model.control_mode != "head" and not self.model.is_eye_open(
+            snap.openness
+        ):
             return
 
         try:
@@ -145,7 +158,13 @@ class GazeEngine(QObject):
 
     @property
     def eyes_open(self) -> bool:
+        if self.model is not None and self.model.control_mode == "head":
+            return True
         return self._openness >= (self.model.openness_threshold if self.model else 0.08)
+
+    @property
+    def head_control(self) -> bool:
+        return self.model is not None and self.model.control_mode == "head"
 
     def state_text(self) -> str:
         if self.demo:
@@ -162,7 +181,7 @@ class GazeEngine(QObject):
             return "Eyes closed"
         if self.age() > 0.6:
             return "Reacquiring…"
-        return "Tracking"
+        return "Head tracking" if self.head_control else "Eye tracking"
 
     def tracking_live(self) -> bool:
         if self.demo:

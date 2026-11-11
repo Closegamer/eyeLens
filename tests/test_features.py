@@ -7,6 +7,7 @@ import numpy as np
 from eyelens.gaze.features import (
     EXPANDED_FEATURE_NAMES,
     FEATURE_NAMES,
+    HEAD_MODEL_FEATURE_INDICES,
     LEFT_EYE_INNER,
     LEFT_EYE_LOWER,
     LEFT_EYE_OUTER,
@@ -18,9 +19,13 @@ from eyelens.gaze.features import (
     RIGHT_EYE_OUTER,
     RIGHT_EYE_UPPER,
     RIGHT_IRIS_CENTER,
+    control_mode_for_saved_model,
     expand_features,
     extract_features,
     extract_head_pose,
+    model_feature_indices,
+    model_mode,
+    select_model_features,
 )
 
 FRAME_W = 640
@@ -128,6 +133,29 @@ def test_expanded_feature_length() -> None:
     expanded = expand_features(features.values)
     assert expanded.shape == (len(EXPANDED_FEATURE_NAMES),)
     assert np.all(np.isfinite(expanded))
+
+
+def test_model_feature_selection_for_control_modes() -> None:
+    features = extract_features(make_landmarks(head_dx=0.05), FRAME_W, FRAME_H)
+    assert features is not None
+    head = select_model_features(features.values, "head")
+    eyes = select_model_features(features.values, "eyes")
+    assert np.array_equal(eyes[:8], features.values[:8])
+    assert not np.any(eyes[8:])
+    assert np.array_equal(head[8:], features.values[8:])
+    assert not np.any(head[:8])
+    assert model_feature_indices("head") == HEAD_MODEL_FEATURE_INDICES
+    assert model_feature_indices("eyes") == tuple(range(8))
+    assert model_mode("head") == "head6"
+    assert model_mode("eyes") == "iris8"
+
+
+def test_saved_model_mode_resolution() -> None:
+    assert control_mode_for_saved_model("head6") == "head"
+    assert control_mode_for_saved_model("iris8") == "eyes"
+    assert control_mode_for_saved_model("") == "eyes"
+    assert control_mode_for_saved_model("iris8", "head") == "head"
+    assert control_mode_for_saved_model("unknown") is None
 
 
 def test_extract_head_pose() -> None:

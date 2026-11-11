@@ -2,13 +2,16 @@
 
 The feature vector mixes eye-in-head information (iris position inside each
 eye) with head-pose proxies.  A per-user calibration learns the mapping from
-these features to screen coordinates, which is considerably more robust than
-using raw iris pixels alone.
+these features to screen coordinates.
 
-All eye-local measurements are made in a rotated eye frame.  This matters:
-normalising the iris by the raw eyelid height makes vertical gaze depend on how
-open the eye happens to be, and makes both vertical gaze and blink detection
-change when the head tilts.
+* Head control (the default) fits the six gaze-independent head/face features:
+  nose-vs-eye yaw/pitch, head roll, eye-mid position, and apparent face size.
+  Moving or turning the head moves the lens.  The eye features are ignored, so
+  the lens keeps working even while the user blinks or closes their eyes.
+* Eye control (optional fallback) fits the eight iris features in a rotated
+  eye frame.  Normalising the iris by the raw eyelid height would make vertical
+  gaze depend on how open the eye happens to be and make both vertical gaze and
+  blink detection change when the head tilts, hence the rotated frame.
 """
 
 from __future__ import annotations
@@ -110,14 +113,16 @@ EXPANDED_FEATURE_NAMES: tuple[str, ...] = (
 
 _NAME_TO_INDEX = {name: i for i, name in enumerate(FEATURE_NAMES)}
 
-# The fitted gaze model deliberately uses only the eye-in-head features.
-# Raw head/face translation features (head yaw/pitch/roll proxies, face x/y,
-# apparent face size) drift slowly during a calibration and correlate with
-# target position.  On real calibration data they made held-out accuracy much
-# worse: the model learned the drift as a gaze cue.  Keep the full 14-value
-# vector for diagnostics and previews, but fit on the eye features only.
-MODEL_FEATURE_INDICES: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6, 7)
-MODEL_MODE = "iris8"
+# Head control uses the six head/face features.  They contain no iris position,
+# so looking around without moving the head does not move the lens.  When the
+# user moved their head during an eye calibration these same features acted as
+# a harmful nuisance signal; in head mode they are the intended control input.
+HEAD_MODEL_FEATURE_INDICES: tuple[int, ...] = (8, 9, 10, 11, 12, 13)
+EYE_MODEL_FEATURE_INDICES: tuple[int, ...] = (0, 1, 2, 3, 4, 5, 6, 7)
+
+CONTROL_MODES: tuple[str, ...] = ("head", "eyes")
+DEFAULT_CONTROL_MODE = "head"
+_CONTROL_MODEL_MODES = {"head": "head6", "eyes": "iris8"}
 
 HEAD_POSE_FEATURES: tuple[str, ...] = (
     "pose_fx",
@@ -129,13 +134,57 @@ HEAD_POSE_FEATURES: tuple[str, ...] = (
 )
 
 
+def normalized_control_mode(mode: str | None) -> str:
+    """Return a valid control mode, falling back to the default."""
+    value = str(mode or "").strip().lower()
+    return value if value in CONTROL_MODES else DEFAULT_CONTROL_MODE
+
+
+def model_feature_indices(
+    control_mode: str = DEFAULT_CONTROL_MODE,
+) -> tuple[int, ...]:
+    """Feature indices used by the fitted model for a control mode."""
+    mode = normalized_control_mode(control_mode)
+    if mode == "head":
+        return HEAD_MODEL_FEATURE_INDICES
+    return EYE_MODEL_FEATURE_INDICES
+
+
+def model_mode(control_mode: str = DEFAULT_CONTROL_MODE) -> str:
+    """Persistence identifier for a control mode's model layout."""
+    return _CONTROL_MODEL_MODES[normalized_control_mode(control_mode)]
+
+
+def control_mode_for_saved_model(
+    stored_model_mode: object, explicit_mode: object = None
+) -> str | None:
+    """Resolve the control mode of a saved calibration.
+
+    New files store ``control_mode``.  Older files only have ``model_mode`` and
+    are eye models; an unknown/missing mode is treated as a legacy eye model,
+    which the caller may still reject for other version reasons.
+    """
+    if isinstance(explicit_mode, str):
+        value = explicit_mode.strip().lower()
+        if value in CONTROL_MODES:
+            return value
+    stored = str(stored_model_mode or "").strip().lower()
+    if stored == "head6":
+        return "head"
+    if stored in ("", "iris8"):
+        return "eyes"
+    return None
+
+
 def extract_head_pose(matrix: object) -> np.ndarray | None:
     """Extract a compact head pose from MediaPipe's 4x4 face transform.
 
     Returns six values: the face forward vector (three rotation components)
-    and the head translation in the canonical face units.  These are used only
-    for the optional head-pose correction layer; the base gaze model stays on
-    the eye features.
+    and the head translation in the canonical face units.  These are used by
+    the optional head-pose correction layer in eye mode.  Head control fits
+    the head/face proxies in :data:`FEATURE_NAMES` instead, because they are
+    already normalized by interocular distance and work even when MediaPipe
+    does not return a transformation matrix.
     """
     try:
         pose = np.asarray(matrix, dtype=np.float64)
@@ -161,13 +210,16 @@ def extract_head_pose(matrix: object) -> np.ndarray | None:
     return values
 
 
-def select_model_features(values: np.ndarray) -> np.ndarray:
+def select_model_features(
+    values: np.ndarray, control_mode: str = DEFAULT_CONTROL_MODE
+) -> np.ndarray:
     """Return a copy of a feature vector with non-model features zeroed."""
     values = np.asarray(values, dtype=np.float64).reshape(-1)
     if values.size != len(FEATURE_NAMES):
         raise ValueError(f"expected {len(FEATURE_NAMES)} features, got {values.size}")
+    indices = list(model_feature_indices(control_mode))
     result = np.zeros_like(values)
-    result[list(MODEL_FEATURE_INDICES)] = values[list(MODEL_FEATURE_INDICES)]
+    result[indices] = values[indices]
     return result
 
 

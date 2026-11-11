@@ -1,5 +1,11 @@
 """Per-user calibration: polynomial ridge + kernel-ridge residual model.
 
+The same regression machinery supports two control modes:
+
+* ``head`` (default): maps gaze-independent head/face features to the screen.
+  The lens follows where the head points, not where the eyes look.
+* ``eyes``: maps iris position to the screen.  Kept as an optional fallback.
+
 A single low-order polynomial cannot represent the way a real eye maps to a
 screen: gaze is nonlinear near the edges, and head pose/distance modulate the
 mapping.  The model here combines:
@@ -27,17 +33,20 @@ from typing import Any
 import numpy as np
 
 from .features import (
+    DEFAULT_CONTROL_MODE,
     FEATURE_NAMES,
     FEATURE_VERSION,
     HEAD_POSE_FEATURES,
-    MODEL_FEATURE_INDICES,
-    MODEL_MODE,
+    control_mode_for_saved_model,
     expand_features,
     expand_matrix,
+    model_feature_indices,
+    model_mode,
+    normalized_control_mode,
     select_model_features,
 )
 
-MODEL_VERSION = 2
+MODEL_VERSION = 3
 _MIN_POINTS = 4
 _MAX_SAMPLES_PER_POINT = 16
 _RIDGE_ALPHAS = np.logspace(-3.0, 4.0, 15)
@@ -425,8 +434,11 @@ class GazeModel:
         pose_correction: PoseCorrection | None = None,
         pose_weight: float = 0.0,
         pose_alpha: float = 0.0,
+        control_mode: str = DEFAULT_CONTROL_MODE,
         created_at: str | None = None,
     ) -> None:
+        self.control_mode = normalized_control_mode(control_mode)
+        self.feature_indices = model_feature_indices(self.control_mode)
         self.raw_mean = np.asarray(raw_mean, dtype=np.float64)
         self.raw_std = np.asarray(raw_std, dtype=np.float64)
         self.mean = np.asarray(mean, dtype=np.float64)
@@ -466,8 +478,8 @@ class GazeModel:
         )
         if self.correction_features.size:
             correction_model = np.zeros_like(self.correction_features)
-            correction_model[:, list(MODEL_FEATURE_INDICES)] = (
-                self.correction_features[:, list(MODEL_FEATURE_INDICES)]
+            correction_model[:, list(self.feature_indices)] = (
+                self.correction_features[:, list(self.feature_indices)]
             )
             self._correction_scaled = (
                 correction_model - self.raw_mean
@@ -502,7 +514,10 @@ class GazeModel:
         pose_alpha: float = 0.0,
         pose_weight: float = 0.0,
         pose_correction: PoseCorrection | None = None,
+        control_mode: str = DEFAULT_CONTROL_MODE,
     ) -> GazeModel:
+        control_mode = normalized_control_mode(control_mode)
+        indices = list(model_feature_indices(control_mode))
         samples = np.asarray(samples, dtype=np.float64)
         targets = np.asarray(targets, dtype=np.float64)
         point_ids = np.asarray(point_ids, dtype=np.int64).reshape(-1)
@@ -522,12 +537,11 @@ class GazeModel:
         )
         unique_points = np.unique(point_ids)
 
-        # Fit the gaze mapping on eye-in-head features only.  The head/face
-        # features stay in ``samples`` for diagnostics and for future models.
+        # Head control fits the head/face features and ignores the irises.  Eye
+        # control fits the iris features and ignores head/face drift.  The full
+        # 14-value vector stays in ``samples`` for diagnostics.
         model_samples = np.zeros_like(samples)
-        model_samples[:, list(MODEL_FEATURE_INDICES)] = samples[
-            :, list(MODEL_FEATURE_INDICES)
-        ]
+        model_samples[:, indices] = samples[:, indices]
 
         raw_mean, raw_std, raw_scaled = _standardize(model_samples)
         expanded = expand_matrix(model_samples)
@@ -581,14 +595,19 @@ class GazeModel:
                 1.5 * float(np.percentile(residual_norms, 95)),
             )
 
-        # Optional global head-pose correction.  The calibration window selects
-        # pose_weight/pose_alpha on held-out points.  Motion samples are the
-        # same targets observed while the user deliberately moves their head;
-        # they give the correction its pose variation.
+        # Optional global head-pose correction (eye control only).  The
+        # calibration window selects pose_weight/pose_alpha on held-out points.
+        # Motion samples are the same targets observed while the user
+        # deliberately moves their head; they give the correction its pose
+        # variation.  Head control already uses the head pose as its input, so
+        # a second correction would be redundant.
         pose_weight_value = 0.0
         pose_alpha_value = 0.0
         extra_samples: np.ndarray | None = None
-        if pose_correction is not None and pose_weight > 0.0:
+        if control_mode != "eyes":
+            pose_weight = 0.0
+            pose_correction = None
+        elif pose_correction is not None and pose_weight > 0.0:
             pose_weight_value = float(pose_weight)
             pose_alpha_value = float(pose_alpha)
         elif pose_weight > 0.0:
@@ -629,9 +648,7 @@ class GazeModel:
                         motion_pose_values,
                     )
                     motion_model = np.zeros_like(motion_values)
-                    motion_model[:, list(MODEL_FEATURE_INDICES)] = (
-                        motion_values[:, list(MODEL_FEATURE_INDICES)]
-                    )
+                    motion_model[:, indices] = motion_values[:, indices]
                     motion_raw_scaled = (
                         motion_model - raw_mean
                     ) / raw_std
@@ -722,6 +739,7 @@ class GazeModel:
             pose_correction=pose_correction,
             pose_weight=pose_weight_value,
             pose_alpha=pose_alpha_value,
+            control_mode=control_mode,
         )
 
     # -------------------------------------------------------------- predict
@@ -770,7 +788,7 @@ class GazeModel:
         raw = np.asarray(values, dtype=np.float64).reshape(-1)
         if raw.size != len(FEATURE_NAMES):
             raise ValueError(f"expected {len(FEATURE_NAMES)} features")
-        raw = select_model_features(raw)
+        raw = select_model_features(raw, self.control_mode)
         raw = np.clip(raw, self.clip_low, self.clip_high)
         out, raw_scaled = self._predict_base(raw)
         if (
@@ -787,7 +805,7 @@ class GazeModel:
         raw = np.asarray(values, dtype=np.float64).reshape(-1)
         if raw.size != len(FEATURE_NAMES):
             raise ValueError(f"expected {len(FEATURE_NAMES)} features")
-        raw = select_model_features(raw)
+        raw = select_model_features(raw, self.control_mode)
         out, raw_scaled = self._predict_base(raw)
         out = out + self._correction_offset(raw_scaled)
         return GazePrediction(float(out[0]), float(out[1]))
@@ -821,7 +839,7 @@ class GazeModel:
             raise ValueError("correction target has the wrong shape")
 
         raw_full = raw
-        raw = select_model_features(raw)
+        raw = select_model_features(raw, self.control_mode)
         clip_low = np.minimum(self.clip_low, raw)
         clip_high = np.maximum(self.clip_high, raw)
         raw = np.clip(raw, clip_low, clip_high)
@@ -868,6 +886,8 @@ class GazeModel:
             krr_alpha=self.metrics.krr_alpha,
             krr_weight=self.metrics.krr_weight,
             corrections=self.metrics.corrections + 1,
+            pose_weight=self.metrics.pose_weight,
+            pose_alpha=self.metrics.pose_alpha,
         )
         return GazeModel(
             raw_mean=self.raw_mean,
@@ -894,10 +914,15 @@ class GazeModel:
             pose_correction=self.pose_correction,
             pose_weight=self.pose_weight,
             pose_alpha=self.pose_alpha,
+            control_mode=self.control_mode,
             created_at=self.created_at,
         )
 
     def is_eye_open(self, openness: float) -> bool:
+        # Head control does not depend on the eyes at all; requiring open eyes
+        # would only stop the lens while the user is blinking or resting.
+        if self.control_mode == "head":
+            return True
         return float(openness) >= self.openness_threshold
 
     # ---------------------------------------------------------------- quality
@@ -925,6 +950,7 @@ class GazeModel:
 
     def summary(self) -> str:
         text = f"{self.quality_label} · ±{self.error_rmse:.0f} px"
+        text += " · head control" if self.control_mode == "head" else " · eye control"
         if self.metrics.corrections:
             count = self.metrics.corrections
             text += f" · {count} {'fix' if count == 1 else 'fixes'}"
@@ -932,12 +958,17 @@ class GazeModel:
             text += " · head pose"
         return text
 
+    @property
+    def control_label(self) -> str:
+        return "Head" if self.control_mode == "head" else "Eyes"
+
     # ------------------------------------------------------------------- io
     def to_dict(self) -> dict[str, Any]:
         return {
             "version": MODEL_VERSION,
             "feature_version": FEATURE_VERSION,
-            "model_mode": MODEL_MODE,
+            "model_mode": model_mode(self.control_mode),
+            "control_mode": self.control_mode,
             "created_at": self.created_at,
             "screen": self.screen,
             "openness_threshold": self.openness_threshold,
@@ -1000,11 +1031,22 @@ class GazeModel:
             samples = np.asarray(raw["samples"], dtype=np.float64)
             targets = np.asarray(raw["targets"], dtype=np.float64)
             point_ids = np.asarray(raw["point_ids"], dtype=np.int64)
+            control_mode = control_mode_for_saved_model(
+                raw.get("model_mode"), raw.get("control_mode")
+            )
+            if control_mode is None:
+                return None
+            expected_model_mode = model_mode(control_mode)
             pose_alpha = float(raw.get("pose_alpha", 0.0))
             pose_weight = float(raw.get("pose_weight", 0.0))
             had_pose = pose_weight > 0.0
             pose_correction = None
             pose_items = raw.get("pose_correction")
+            if control_mode != "eyes":
+                pose_alpha = 0.0
+                pose_weight = 0.0
+                had_pose = False
+                pose_items = None
             if isinstance(pose_items, dict):
                 mean = np.asarray(pose_items["mean"], dtype=np.float64)
                 std = np.asarray(pose_items["std"], dtype=np.float64)
@@ -1058,13 +1100,13 @@ class GazeModel:
                 if isinstance(metrics, dict)
                 else 0
             )
-            old_model = str(raw.get("model_mode", "")) != MODEL_MODE
+            old_model = str(raw.get("model_mode", "")) != expected_model_mode
             if old_model:
-                # Saved before the eye-only model.  Its held-out number no
-                # longer describes the refitted model; report the fresh LOO
-                # estimate instead of a stale validation error.  Its drag
-                # corrections were relative to the old all-feature base and
-                # cannot be reused safely.
+                # Saved before the current feature selection for this control
+                # mode.  Its held-out number no longer describes the refitted
+                # model; report the fresh LOO estimate instead of a stale
+                # validation error.  Its drag corrections were relative to the
+                # old base and cannot be reused safely.
                 validation = 0.0
                 validation_points = 0
                 corrections = 0
@@ -1105,6 +1147,7 @@ class GazeModel:
                 pose_correction=pose_correction,
                 pose_weight=pose_weight,
                 pose_alpha=pose_alpha,
+                control_mode=control_mode,
             )
             saved_clip_low = raw.get("clip_low")
             saved_clip_high = raw.get("clip_high")

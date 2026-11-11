@@ -163,14 +163,17 @@ class EyeTracker(QThread):
             return self._snapshot
 
     def recent_features(
-        self, seconds: float = 0.5, since: float | None = None
+        self,
+        seconds: float = 0.5,
+        since: float | None = None,
+        require_open: bool = True,
     ) -> np.ndarray | None:
-        """Robust median eye features from the last part of a fixation.
+        """Robust median features from the last part of a fixation.
 
         Used by the mouse-drag correction: after the user releases the lens we
         wait a short moment, then take the recent frames where the face was
-        visible and the eyes were open.  Per-feature MAD rejection removes
-        blinks and single-frame landmark glitches.
+        visible (and, for eye control, the eyes were open).  Per-feature MAD
+        rejection removes blinks and single-frame landmark glitches.
         """
         cutoff = time.monotonic() - max(0.05, float(seconds))
         if since is not None:
@@ -183,7 +186,7 @@ class EyeTracker(QThread):
             if snap.timestamp >= cutoff
             and snap.face_found
             and snap.features is not None
-            and snap.openness >= 0.05
+            and (not require_open or snap.openness >= 0.05)
         ]
         if len(rows) < 3:
             return None

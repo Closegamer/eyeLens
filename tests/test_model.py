@@ -54,10 +54,50 @@ def make_dataset() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     )
 
 
+def make_head_dataset() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Synthetic head aiming: the head features follow the screen target."""
+    rng = np.random.default_rng(17)
+    xs = np.linspace(WIDTH * 0.08, WIDTH * 0.92, 5)
+    ys = np.linspace(HEIGHT * 0.12, HEIGHT * 0.88, 5)
+    samples: list[np.ndarray] = []
+    targets: list[list[float]] = []
+    point_ids: list[int] = []
+    point = 0
+    for y in ys:
+        for x in xs:
+            for _ in range(12):
+                nx = x / WIDTH - 0.5
+                ny = y / HEIGHT - 0.5
+                values = np.zeros(len(FEATURE_NAMES))
+                # Iris features are deliberately unrelated to the target.
+                values[0] = values[2] = values[4] = 0.5 + rng.normal(0, 0.05)
+                values[1] = values[3] = values[5] = 0.5 + rng.normal(0, 0.05)
+                values[8] = 0.34 * nx + rng.normal(0, 0.002)
+                values[9] = 0.24 * ny + rng.normal(0, 0.002)
+                values[10] = rng.normal(0, 0.002)
+                values[11] = 0.22 * nx + 0.10 * values[8] + rng.normal(0, 0.002)
+                values[12] = 0.16 * ny + 0.08 * values[9] + rng.normal(0, 0.002)
+                values[13] = 0.90 + 0.02 * nx + rng.normal(0, 0.001)
+                samples.append(values)
+                targets.append([x, y])
+                point_ids.append(point)
+            point += 1
+    return (
+        np.asarray(samples),
+        np.asarray(targets),
+        np.asarray(point_ids, dtype=np.int64),
+    )
+
+
 def test_fit_predict_and_metrics() -> None:
     samples, targets, point_ids = make_dataset()
     model = GazeModel.fit(
-        samples, targets, point_ids, openness_threshold=0.12, screen=SCREEN.to_dict()
+        samples,
+        targets,
+        point_ids,
+        openness_threshold=0.12,
+        screen=SCREEN.to_dict(),
+        control_mode="eyes",
     )
     assert model.metrics.n_points == 25
     assert model.metrics.n_samples == len(samples)
@@ -77,7 +117,14 @@ def test_fit_predict_and_metrics() -> None:
 
 def test_is_eye_open_uses_calibration_threshold() -> None:
     samples, targets, point_ids = make_dataset()
-    model = GazeModel.fit(samples, targets, point_ids, 0.12, SCREEN.to_dict())
+    model = GazeModel.fit(
+        samples,
+        targets,
+        point_ids,
+        0.12,
+        SCREEN.to_dict(),
+        control_mode="eyes",
+    )
     assert model.is_eye_open(0.2)
     assert not model.is_eye_open(0.01)
 
@@ -92,16 +139,25 @@ def test_independent_validation_error_is_used() -> None:
         SCREEN.to_dict(),
         validation_rmse=42.0,
         validation_points=9,
+        control_mode="eyes",
     )
     assert model.metrics.validation_rmse == 42.0
     assert model.metrics.validation_points == 9
     assert model.error_rmse == 42.0
-    assert model.summary().endswith("±42 px")
+    assert "±42 px" in model.summary()
+    assert "eye control" in model.summary()
 
 
 def test_model_ignores_head_and_face_features() -> None:
     samples, targets, point_ids = make_dataset()
-    model = GazeModel.fit(samples, targets, point_ids, 0.12, SCREEN.to_dict())
+    model = GazeModel.fit(
+        samples,
+        targets,
+        point_ids,
+        0.12,
+        SCREEN.to_dict(),
+        control_mode="eyes",
+    )
     base = samples[50].copy()
     changed = base.copy()
     changed[8:] += 5.0
@@ -109,6 +165,118 @@ def test_model_ignores_head_and_face_features() -> None:
     second = model.predict(changed)
     assert abs(first.x - second.x) < 1e-6
     assert abs(first.y - second.y) < 1e-6
+
+
+def test_head_model_uses_only_head_features() -> None:
+    samples, targets, point_ids = make_head_dataset()
+    model = GazeModel.fit(
+        samples,
+        targets,
+        point_ids,
+        0.12,
+        SCREEN.to_dict(),
+        control_mode="head",
+    )
+    assert model.control_mode == "head"
+    assert model.metrics.loo_rmse < 40.0
+    assert model.quality_ok
+
+    base = samples[50].copy()
+    eye_changed = base.copy()
+    eye_changed[:8] += 5.0
+    head_changed = base.copy()
+    head_changed[8] += 0.10
+    first = model.predict(base)
+    second = model.predict(eye_changed)
+    third = model.predict(head_changed)
+    assert abs(first.x - second.x) < 1e-6
+    assert abs(first.y - second.y) < 1e-6
+    assert abs(first.x - third.x) > 20.0
+    assert abs(first.y - third.y) > 2.0
+
+
+def test_head_control_does_not_require_open_eyes() -> None:
+    samples, targets, point_ids = make_head_dataset()
+    model = GazeModel.fit(
+        samples,
+        targets,
+        point_ids,
+        0.12,
+        SCREEN.to_dict(),
+        control_mode="head",
+    )
+    assert model.is_eye_open(0.0)
+    assert model.is_eye_open(1.0)
+    assert "head control" in model.summary()
+
+
+def test_head_mode_ignores_pose_correction_inputs() -> None:
+    samples, targets, point_ids = make_head_dataset()
+    rng = np.random.default_rng(23)
+    poses = rng.normal(0.0, 1.0, (samples.shape[0], 6))
+    model = GazeModel.fit(
+        samples,
+        targets,
+        point_ids,
+        0.12,
+        SCREEN.to_dict(),
+        motion_samples=samples,
+        motion_targets=targets,
+        motion_point_ids=point_ids,
+        motion_poses=poses,
+        pose_alpha=0.01,
+        pose_weight=1.0,
+        control_mode="head",
+    )
+    assert model.pose_weight == 0.0
+    assert model.pose_correction is None
+    assert model.metrics.pose_weight == 0.0
+
+
+def test_head_model_save_load_roundtrip(tmp_path) -> None:
+    samples, targets, point_ids = make_head_dataset()
+    model = GazeModel.fit(
+        samples,
+        targets,
+        point_ids,
+        0.12,
+        SCREEN.to_dict(),
+        validation_rmse=31.0,
+        validation_points=9,
+        control_mode="head",
+    )
+    path = tmp_path / "head-calibration.json"
+    model.save(path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["control_mode"] == "head"
+    assert raw["model_mode"] == "head6"
+    loaded = GazeModel.load(path)
+    assert loaded is not None
+    assert loaded.control_mode == "head"
+    assert loaded.metrics.validation_rmse == 31.0
+    first = model.predict(samples[25])
+    second = loaded.predict(samples[25])
+    assert abs(first.x - second.x) < 1e-6
+    assert abs(first.y - second.y) < 1e-6
+
+
+def test_load_without_control_mode_defaults_to_eyes(tmp_path) -> None:
+    samples, targets, point_ids = make_dataset()
+    model = GazeModel.fit(
+        samples,
+        targets,
+        point_ids,
+        0.12,
+        SCREEN.to_dict(),
+        control_mode="eyes",
+    )
+    raw = model.to_dict()
+    raw.pop("control_mode")
+    path = tmp_path / "legacy-iris.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    loaded = GazeModel.load(path)
+    assert loaded is not None
+    assert loaded.control_mode == "eyes"
 
 
 def test_load_without_model_mode_uses_loo_estimate(tmp_path) -> None:
@@ -121,6 +289,7 @@ def test_load_without_model_mode_uses_loo_estimate(tmp_path) -> None:
         SCREEN.to_dict(),
         validation_rmse=42.0,
         validation_points=9,
+        control_mode="eyes",
     )
     raw = model.to_dict()
     raw.pop("model_mode")
@@ -174,6 +343,7 @@ def test_hybrid_uses_kernel_stage_for_nonlinear_mapping() -> None:
         np.asarray(point_ids, dtype=np.int64),
         0.12,
         SCREEN.to_dict(),
+        control_mode="eyes",
     )
     assert model.metrics.krr_weight > 0.0
     assert model.metrics.loo_rmse < 40.0
@@ -187,7 +357,14 @@ def test_pose_correction_recovers_pose_dependent_offset(tmp_path) -> None:
     shifted[:, 0] += 400.0 * poses[:, 0]
     shifted[:, 1] += 300.0 * poses[:, 1]
 
-    base = GazeModel.fit(samples, shifted, point_ids, 0.12, SCREEN.to_dict())
+    base = GazeModel.fit(
+        samples,
+        shifted,
+        point_ids,
+        0.12,
+        SCREEN.to_dict(),
+        control_mode="eyes",
+    )
     posed = GazeModel.fit(
         samples,
         shifted,
@@ -200,6 +377,7 @@ def test_pose_correction_recovers_pose_dependent_offset(tmp_path) -> None:
         motion_poses=poses,
         pose_alpha=0.01,
         pose_weight=1.0,
+        control_mode="eyes",
     )
     index = 50
     base_error = np.linalg.norm(
@@ -231,7 +409,14 @@ def test_pose_correction_recovers_pose_dependent_offset(tmp_path) -> None:
 
 def test_mouse_correction_moves_prediction_and_persists(tmp_path) -> None:
     samples, targets, point_ids = make_dataset()
-    model = GazeModel.fit(samples, targets, point_ids, 0.12, SCREEN.to_dict())
+    model = GazeModel.fit(
+        samples,
+        targets,
+        point_ids,
+        0.12,
+        SCREEN.to_dict(),
+        control_mode="eyes",
+    )
     feature = samples[100].copy()
     before = model.predict(feature)
     target = (before.x + 180.0, before.y - 120.0)
@@ -274,6 +459,7 @@ def test_save_and_load_roundtrip(tmp_path) -> None:
         SCREEN.to_dict(),
         validation_rmse=37.0,
         validation_points=9,
+        control_mode="eyes",
     )
     path = tmp_path / "calibration.json"
     model.save(path)

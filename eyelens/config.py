@@ -134,9 +134,11 @@ class Settings:
     show_osd: bool = True
     lens_visible: bool = True
     camera_index: int = 0
+    control_mode: str = "head"
 
     DIAMETER_RANGE = (120, 1200)
     SHAPE_OPTIONS = ("round", "square", "wide")
+    CONTROL_MODE_OPTIONS = ("head", "eyes")
     WIDE_ASPECT = 1.6
     ZOOM_RANGE = (1.0, 6.0)
     SMOOTHING_RANGE = (0.0, 1.0)
@@ -172,6 +174,10 @@ class Settings:
         )
         shape = str(self.shape).strip().lower()
         self.shape = shape if shape in self.SHAPE_OPTIONS else "round"
+        control = str(self.control_mode).strip().lower()
+        self.control_mode = (
+            control if control in self.CONTROL_MODE_OPTIONS else "head"
+        )
         self.zoom = round(_clamp(float(self.zoom), *self.ZOOM_RANGE), 2)
         self.smoothing = _clamp(float(self.smoothing), *self.SMOOTHING_RANGE)
         self.opacity = _clamp(float(self.opacity), *self.OPACITY_RANGE)
