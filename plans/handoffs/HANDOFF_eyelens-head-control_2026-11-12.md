@@ -1,4 +1,4 @@
-# eyeLens — head control, pointer fallback, interactive lens (v0.10.0)
+# eyeLens — head control, pointer fallback, interactive lens, wheel trim (v0.11.0)
 
 **Date:** 2026-11-12
 **Status:** IMPLEMENTED — real head calibration pending
@@ -89,8 +89,22 @@ the default.  Eye control is retained only as an optional fallback in Settings.
   - Head calibration uses near-border targets:
     x = 0.03/0.265/0.5/0.735/0.97, y = 0.10..0.96, so the head model can
     predict the taskbar.  Eye mode keeps the conservative interior grid.
+- **Ctrl+Alt+wheel fine trim (v0.11.0):**
+  - `HotkeyManager` now owns a global `pynput.mouse.Listener`; `_on_scroll`
+    checks `GetAsyncKeyState(VK_CONTROL/VK_MENU)` and emits `trim_lens(dx, dy)`.
+  - `EyeLensApp._on_trim_lens` adds `dx * 10` and subtracts `dy * 10` from
+    `Settings.trim_x/trim_y` (screen y grows downwards), clamped to ±1200.
+  - Trim is persisted in settings, shown in the OSD and status detail, applied
+    only to camera-driven predictions in `GazeEngine.poll`, ignored in
+    pointer/demo mode.
+  - `Ctrl+Alt+0` and Settings → **Reset trim** clear it; a successful
+    calibration resets it.
+  - The overlay swallows Ctrl+Alt+wheel over the lens so the app underneath
+    does not scroll twice.
+  - Mouse-drag correction subtracts the trim from its target, so the lens stays
+    at the dropped point after the model learns the local correction.
 - **UI/docs:** settings header, Control row, calibration help, status labels,
-  result screen, README, version `0.10.0`.
+  result screen, hotkey list, README, version `0.11.0`.
 
 ## Key Decisions
 
@@ -112,7 +126,7 @@ the default.  Eye control is retained only as an optional fallback in Settings.
 
 | Check | Result |
 | --- | --- |
-| `pytest` | 47 passed |
+| `pytest` | 48 passed |
 | `ruff check .` | clean |
 | `compileall eyelens` | clean |
 | `python -m eyelens --smoke-test` | exit 0; reports old calibration needs recalibration |
@@ -127,6 +141,8 @@ the default.  Eye control is retained only as an optional fallback in Settings.
 | native wheel | wheel -120 forwarded to the target under the lens |
 | edge reach screenshot | lens centre reached (1918,1198) on 1920×1200; taskbar corner visible in clipped lens |
 | head border grid | synthetic head calibration still 34 points, 0.0 px |
+| global wheel listener | Ctrl+Alt+wheel up/down emitted `(0,1)` / `(0,-1)` |
+| engine trim | prediction (500,400) + trim (40,-30) → (540,370) |
 
 The synthetic E2E script lives outside the repo at
 `C:\Users\avgrigorev\AppData\Local\Temp\opencode\head_calibration_e2e.py`.
@@ -162,14 +178,19 @@ eye/pose calibration. The first head calibration will overwrite it.
    the action. Point/look at the taskbar and corners; the lens should reach
    them and be partially clipped. Verify clicks outside the lens still pass
    through.
-4. If head control works but feels too sensitive:
+4. **Wheel trim acceptance test:** look at the top of the screen with the lens
+   low; hold Ctrl+Alt and scroll up until it reaches the target; verify the
+   same trim applies at other screen positions, persists across restart, and
+   `Ctrl+Alt+0` clears it. Check that a mouse-drag correction still lands at
+   the dropped point while trim is nonzero.
+5. If head control works but feels too sensitive:
    - tune the global smoothing default or add a head-specific gain slider;
    - consider a small deadzone around the centre.
-5. If the mapping quality is poor:
+6. If the mapping quality is poor:
    - compare the six proxy features with MediaPipe’s raw 6-DOF pose features;
    - record per-point residuals before changing the model;
    - try a denser 6×6 head grid only if the error is a sampling problem.
-6. Keep eye mode working; it shares the same model code but a different feature
+7. Keep eye mode working; it shares the same model code but a different feature
    mask and calibration protocol.
 
 ## Risks & Blockers
@@ -192,19 +213,25 @@ eye/pose calibration. The first head calibration will overwrite it.
 - The lens is intentionally partially clipped at screen edges; that is how it
   reaches the taskbar. Users who prefer a fully visible lens could get an
   optional "keep lens on screen" toggle later.
+- Ctrl+Alt+wheel is a global gesture. Apps that also react to it may scroll
+  while the trim is adjusted; the overlay swallows it only when the pointer is
+  over the lens.
+- Trim is a global screen offset, not per-region; use `Ctrl+Alt+D` for local
+  corrections.
 - `Modelfile` in the repo root remains an unrelated untracked file; leave it.
 
 ## Exact State
 
 - Repo: `https://github.com/Closegamer/eyeLens` (private, `main`)
-- Version: `0.10.0`
+- Version: `0.11.0`
 - Code commits:
   - `3caf05b` — `feat: head-controlled lens with eye mode fallback (v0.9.0)`
   - `c1506c0` — `feat: mouse and touch pointer fallback when the camera is unavailable (v0.9.1)`
   - `10a5abe` — `feat: interactive lens clicks, edge-to-edge reach, head border targets (v0.10.0)`
-- Tags: `v0.9.0`, `v0.9.1`, `v0.10.0`
+  - `d44cece` — `feat: Ctrl+Alt+wheel lens fine trim (v0.11.0)`
+- Tags: `v0.9.0`, `v0.9.1`, `v0.10.0`, `v0.11.0`
 - Virtualenv: `C:\a_REPOS\eyeLense\.venv` (Python 3.12)
-- Tests: 47 passed; ruff clean; smoke exit 0
+- Tests: 48 passed; ruff clean; smoke exit 0
 - Settings default: `control_mode="head"`; schema remains 2
 - Old calibration file is rejected on load
 
@@ -230,6 +257,10 @@ run.bat
 # Interactive lens / edges:
 # Move the lens over a button and click the magnified image; right-click and
 # scroll. Point/look at the taskbar and corners; the lens should reach them.
+
+# Fine trim:
+# Look at the top of the screen. Ctrl+Alt+wheel up moves the lens up 10 px per
+# notch. Ctrl+Alt+0 resets the trim.
 ```
 
 Key files:
@@ -238,8 +269,11 @@ Key files:
 - `eyelens/gaze/model.py` — head/eye feature selection, v3 save/load.
 - `eyelens/ui/calibration_window.py` — head aiming protocol and texts.
 - `eyelens/ui/settings_window.py` — Control combo and mode help.
-- `eyelens/gaze/engine.py` — head-mode gating/filtering and pointer fallback.
+- `eyelens/gaze/engine.py` — head-mode gating/filtering, pointer fallback,
+  runtime trim.
 - `eyelens/app.py` — mode validation, calibration wiring, pointer fallback,
-  status copy.
+  trim hotkey/reset, status copy.
+- `eyelens/hotkeys.py` — global keyboard hotkeys plus Ctrl+Alt+wheel listener.
+- `eyelens/config.py` — settings including `trim_x`/`trim_y`.
 - `eyelens/ui/overlay.py` — pointer-mode lens, edge-aware clamping, custom
   hit-test, mapped clicks/right-clicks/double-clicks/wheel.
