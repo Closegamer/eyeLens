@@ -61,6 +61,8 @@ settings as a fallback.
 - **No self-reflection** — the lens is excluded from its own screen capture
   (`WDA_EXCLUDEFROMCAPTURE`), so it never films itself.
 - **Tray + global hotkeys** — control everything while another app has focus.
+- **English / Russian interface** — follows the Windows language on first
+  launch; switch it any time in the settings.
 - **Offline and private** — video frames are processed in memory and never saved
   or uploaded. Calibration is stored locally.
 
@@ -183,6 +185,8 @@ Everything is also available from the tray icon and the settings window:
   are looking and the model learns that correction. Also `Ctrl+Alt+D`.
 - **Camera** — choose a different webcam index and apply it. Changing the camera
   usually requires recalibrating for best accuracy.
+- **Language** — **System** (follows Windows), **English** or **Русский**.
+  Switching applies immediately.
 
 ## How it works
 

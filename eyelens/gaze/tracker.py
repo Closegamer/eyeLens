@@ -14,6 +14,7 @@ import numpy as np
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QImage
 
+from ..i18n import tr
 from .features import EyeFeatures, extract_features, extract_head_pose
 
 PREVIEW_WIDTH = 480
@@ -119,7 +120,7 @@ class EyeTracker(QThread):
         self._snapshot = TrackerSnapshot(0, None, 0.0, False, 0.0, 0.0)
         self._history: deque[TrackerSnapshot] = deque(maxlen=120)
         self._preview_requests = 0
-        self._status = "Camera stopped"
+        self._status = tr("Camera stopped")
         self._error = ""
         self._seq = 0
         self._ready = False
@@ -252,12 +253,14 @@ class EyeTracker(QThread):
 
             if self.model_path is None or not self.model_path.is_file():
                 self._fail(
-                    "Face tracking model is missing. Run scripts/download_model.py "
-                    "or restart eyeLens with an internet connection."
+                    tr(
+                        "Face tracking model is missing. Run scripts/download_model.py "
+                        "or restart eyeLens with an internet connection."
+                    )
                 )
                 return
 
-            self._set_status("Loading face tracking model…")
+            self._set_status(tr("Loading face tracking model…"))
             options = vision.FaceLandmarkerOptions(
                 base_options=mp_python.BaseOptions(
                     model_asset_path=str(self.model_path)
@@ -276,11 +279,17 @@ class EyeTracker(QThread):
             cap, camera_label = self._open_camera(cv2)
             if cap is None:
                 self._fail(
-                    "Could not open the webcam. Check Windows camera privacy "
-                    "settings and whether another app is using it."
+                    tr(
+                        "Could not open the webcam. Check Windows camera privacy "
+                        "settings and whether another app is using it."
+                    )
                 )
                 return
-            self._set_status(f"Camera running ({camera_label}) — looking for your face…")
+            self._set_status(
+                tr("Camera running ({camera_label}) — looking for your face…").format(
+                    camera_label=camera_label
+                )
+            )
             with self._lock:
                 self._ready = True
             self.ready.emit(True)
@@ -300,7 +309,7 @@ class EyeTracker(QThread):
                 if not ok or frame is None:
                     failed_reads += 1
                     if failed_reads >= 15:
-                        self._fail("The webcam stopped delivering frames.")
+                        self._fail(tr("The webcam stopped delivering frames."))
                         break
                     time.sleep(0.02)
                     continue
@@ -344,9 +353,9 @@ class EyeTracker(QThread):
                     last_face = face_found
                     self.face_changed.emit(face_found)
                     self._set_status(
-                        "Tracking your eyes"
+                        tr("Tracking your eyes")
                         if face_found
-                        else "Looking for your face…"
+                        else tr("Looking for your face…")
                     )
 
                 self._seq += 1
@@ -371,7 +380,9 @@ class EyeTracker(QThread):
                     self._emit_preview(cv2, frame, result.face_landmarks)
         except Exception:  # pragma: no cover - hardware/driver dependent
             traceback.print_exc()
-            self._fail("Eye tracking stopped unexpectedly. Check the log for details.")
+            self._fail(
+                tr("Eye tracking stopped unexpectedly. Check the log for details.")
+            )
         finally:
             if cap is not None:
                 with contextlib.suppress(Exception):
@@ -382,7 +393,7 @@ class EyeTracker(QThread):
             with self._lock:
                 self._ready = False
             self.ready.emit(False)
-            self._set_status("Camera stopped")
+            self._set_status(tr("Camera stopped"))
 
     # ----------------------------------------------------------------- helpers
     def _fail(self, message: str) -> None:

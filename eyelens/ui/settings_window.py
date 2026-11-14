@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 from ..config import Settings, lens_dimensions
 from ..gaze.engine import GazeEngine
 from ..gaze.tracker import EyeTracker
+from ..i18n import tr
 from .icon import make_pixmap
 
 _LEVEL_COLORS = {
@@ -55,6 +56,7 @@ class StatusInfo:
     calibration_text: str = "Not calibrated"
     calibration_detail: str = "Calibrate once before using the lens."
     calibration_level: str = "bad"
+    calibration_state: str = "none"
     can_calibrate: bool = False
     can_correct: bool = False
     can_big: bool = False
@@ -67,7 +69,7 @@ class PreviewWidget(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._image: QImage | None = None
-        self._placeholder = "Camera preview"
+        self._placeholder = tr("Camera preview")
         self._live = False
         self.setMinimumSize(280, 158)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -130,7 +132,7 @@ class PreviewWidget(QWidget):
         painter.drawText(
             rect.adjusted(12, 0, -12, -8),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
-            "CAMERA",
+            tr("CAMERA"),
         )
         if self._live:
             painter.setBrush(QColor("#34d399"))
@@ -161,7 +163,7 @@ class StatusRow(QWidget):
         self.dot.setStyleSheet("background:#64748b; border-radius:4px;")
         title_label = QLabel(title)
         title_label.setObjectName("muted")
-        title_label.setFixedWidth(78)
+        title_label.setMinimumWidth(78)
         self.value = QLabel("—")
         self.value.setWordWrap(True)
         self.value.setTextInteractionFlags(
@@ -246,14 +248,27 @@ class SettingsWindow(QWidget):
         titles.setSpacing(1)
         title = QLabel("eyeLens")
         title.setObjectName("title")
-        subtitle = QLabel("A magnifying lens that follows your head")
+        subtitle = QLabel(tr("A magnifying lens that follows your head"))
         subtitle.setObjectName("muted")
         titles.addWidget(title)
         titles.addWidget(subtitle)
         header.addLayout(titles, 1)
-        version = QLabel("v0.11")
+        version = QLabel("v0.12")
         version.setObjectName("badge")
         header.addWidget(version, 0, Qt.AlignmentFlag.AlignTop)
+        language_label = QLabel(tr("Language"))
+        language_label.setObjectName("muted")
+        header.addWidget(language_label, 0, Qt.AlignmentFlag.AlignTop)
+        self.language_combo = QComboBox()
+        self.language_combo.addItem(tr("System"), "auto")
+        self.language_combo.addItem("English", "en")
+        self.language_combo.addItem("Русский", "ru")
+        self.language_combo.setToolTip(
+            tr("Interface language. System follows the Windows language.")
+        )
+        self.language_combo.setFixedWidth(112)
+        self.language_combo.currentIndexChanged.connect(self._on_language)
+        header.addWidget(self.language_combo, 0, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(header)
 
         # Status -------------------------------------------------------------
@@ -266,14 +281,14 @@ class SettingsWindow(QWidget):
         status_layout.addWidget(self.preview, 3)
         status_col = QVBoxLayout()
         status_col.setSpacing(3)
-        self.camera_status = StatusRow("Camera")
-        self.gaze_status = StatusRow("Control")
-        self.calibration_status = StatusRow("Calibration")
+        self.camera_status = StatusRow(tr("Camera"))
+        self.gaze_status = StatusRow(tr("Control"))
+        self.calibration_status = StatusRow(tr("Calibration"))
         status_col.addWidget(self.camera_status)
         status_col.addWidget(self.gaze_status)
         status_col.addWidget(self.calibration_status)
         status_col.addStretch(1)
-        self.detail_label = QLabel("Calibrate once before using the lens.")
+        self.detail_label = QLabel(tr("Calibrate once before using the lens."))
         self.detail_label.setObjectName("muted")
         self.detail_label.setWordWrap(True)
         status_col.addWidget(self.detail_label)
@@ -287,52 +302,58 @@ class SettingsWindow(QWidget):
         lens_layout.setContentsMargins(18, 16, 18, 16)
         lens_layout.setSpacing(10)
         lens_header = QHBoxLayout()
-        lens_title = QLabel("Lens")
+        lens_title = QLabel(tr("Lens"))
         lens_title.setObjectName("section")
         lens_header.addWidget(lens_title)
         lens_header.addStretch(1)
-        self.freeze_button = QPushButton("Freeze")
+        self.freeze_button = QPushButton(tr("Freeze"))
         self.freeze_button.setObjectName("ghost")
         self.freeze_button.setCheckable(True)
         self.freeze_button.setToolTip(
-            "Freeze the lens in place so you can move your eyes without moving it "
-            "(Ctrl+Alt+F)."
+            tr(
+                "Freeze the lens in place so you can move your eyes without moving it "
+                "(Ctrl+Alt+F)."
+            )
         )
         self.freeze_button.toggled.connect(self._toggle_freeze)
         lens_header.addWidget(self.freeze_button)
-        self.correct_button = QPushButton("Fix position")
+        self.correct_button = QPushButton(tr("Fix position"))
         self.correct_button.setObjectName("ghost")
         self.correct_button.setToolTip(
-            "Drag the lens to where you are looking or facing and release; the "
-            "model learns that correction (Ctrl+Alt+D)."
+            tr(
+                "Drag the lens to where you are looking or facing and release; the "
+                "model learns that correction (Ctrl+Alt+D)."
+            )
         )
         self.correct_button.clicked.connect(self.correct_requested.emit)
         lens_header.addWidget(self.correct_button)
-        self.big_button = QPushButton("Big lens")
+        self.big_button = QPushButton(tr("Big lens"))
         self.big_button.setObjectName("ghost")
         self.big_button.setCheckable(True)
         self.big_button.setToolTip(
-            "Toggle a large lens sized to the screen (Ctrl+Alt+B)."
+            tr("Toggle a large lens sized to the screen (Ctrl+Alt+B).")
         )
         self.big_button.toggled.connect(self._toggle_big_lens)
         lens_header.addWidget(self.big_button)
-        self.show_lens = QCheckBox("Show lens")
+        self.show_lens = QCheckBox(tr("Show lens"))
         self.show_lens.toggled.connect(self._toggle_lens_visible)
         lens_header.addWidget(self.show_lens)
         lens_layout.addLayout(lens_header)
 
         control_row = QHBoxLayout()
         control_row.setSpacing(12)
-        control_label = QLabel("Control")
-        control_label.setFixedWidth(84)
+        control_label = QLabel(tr("Control"))
+        control_label.setMinimumWidth(84)
         self.control_combo = QComboBox()
-        self.control_combo.addItem("Head", "head")
-        self.control_combo.addItem("Eyes", "eyes")
+        self.control_combo.addItem(tr("Head"), "head")
+        self.control_combo.addItem(tr("Eyes"), "eyes")
         self.control_combo.setToolTip(
-            "Head: move or turn your head to move the lens (recommended). "
-            "Eyes: follow your gaze. Switching mode requires recalibration. "
-            "If no camera is available, the lens automatically follows the "
-            "mouse or a finger on the touchscreen."
+            tr(
+                "Head: move or turn your head to move the lens (recommended). "
+                "Eyes: follow your gaze. Switching mode requires recalibration. "
+                "If no camera is available, the lens automatically follows the "
+                "mouse or a finger on the touchscreen."
+            )
         )
         self.control_combo.currentIndexChanged.connect(self._on_control_mode)
         control_row.addWidget(control_label)
@@ -341,14 +362,14 @@ class SettingsWindow(QWidget):
 
         shape_row = QHBoxLayout()
         shape_row.setSpacing(12)
-        shape_label = QLabel("Shape")
-        shape_label.setFixedWidth(84)
+        shape_label = QLabel(tr("Shape"))
+        shape_label.setMinimumWidth(84)
         self.shape_combo = QComboBox()
-        self.shape_combo.addItem("Round", "round")
-        self.shape_combo.addItem("Square", "square")
-        self.shape_combo.addItem("Wide", "wide")
+        self.shape_combo.addItem(tr("Round"), "round")
+        self.shape_combo.addItem(tr("Square"), "square")
+        self.shape_combo.addItem(tr("Wide"), "wide")
         self.shape_combo.setToolTip(
-            "Lens shape. Wide keeps the chosen height and is 1.6x wider."
+            tr("Lens shape. Wide keeps the chosen height and is 1.6x wider.")
         )
         self.shape_combo.currentIndexChanged.connect(self._on_shape)
         shape_row.addWidget(shape_label)
@@ -357,36 +378,38 @@ class SettingsWindow(QWidget):
 
         self.size_slider, self.size_value = self._slider_row(
             lens_layout,
-            "Size",
+            tr("Size"),
             Settings.DIAMETER_RANGE[0],
             Settings.DIAMETER_RANGE[1],
             10,
-            "Lens height in pixels; wide lenses are 1.6x wider. "
-            "Press Ctrl+Alt+B for a quick big lens.",
+            tr(
+                "Lens height in pixels; wide lenses are 1.6x wider. "
+                "Press Ctrl+Alt+B for a quick big lens."
+            ),
         )
         self.zoom_slider, self.zoom_value = self._slider_row(
             lens_layout,
-            "Zoom",
+            tr("Zoom"),
             int(Settings.ZOOM_RANGE[0] * 100),
             int(Settings.ZOOM_RANGE[1] * 100),
             5,
-            "Magnification of the area under the lens.",
+            tr("Magnification of the area under the lens."),
         )
         self.smoothing_slider, self.smoothing_value = self._slider_row(
             lens_layout,
-            "Smoothing",
+            tr("Smoothing"),
             0,
             100,
             1,
-            "Higher = calmer, slower lens movement; lower = faster but more jitter.",
+            tr("Higher = calmer, slower lens movement; lower = faster but more jitter."),
         )
         self.opacity_slider, self.opacity_value = self._slider_row(
             lens_layout,
-            "Opacity",
+            tr("Opacity"),
             int(Settings.OPACITY_RANGE[0] * 100),
             int(Settings.OPACITY_RANGE[1] * 100),
             1,
-            "Lens opacity.",
+            tr("Lens opacity."),
         )
         self.size_slider.valueChanged.connect(self._on_size)
         self.zoom_slider.valueChanged.connect(self._on_zoom)
@@ -395,21 +418,21 @@ class SettingsWindow(QWidget):
 
         options = QHBoxLayout()
         options.setSpacing(18)
-        self.ring_checkbox = QCheckBox("Outline")
+        self.ring_checkbox = QCheckBox(tr("Outline"))
         self.ring_checkbox.toggled.connect(self._on_ring)
-        self.osd_checkbox = QCheckBox("On-screen HUD")
+        self.osd_checkbox = QCheckBox(tr("On-screen HUD"))
         self.osd_checkbox.toggled.connect(self._on_osd)
         options.addWidget(self.ring_checkbox)
         options.addWidget(self.osd_checkbox)
         options.addStretch(1)
-        reset_trim = QPushButton("Reset trim")
+        reset_trim = QPushButton(tr("Reset trim"))
         reset_trim.setObjectName("link")
         reset_trim.setToolTip(
-            "Clear the manual Ctrl+Alt+wheel position trim (Ctrl+Alt+0)."
+            tr("Clear the manual Ctrl+Alt+wheel position trim (Ctrl+Alt+0).")
         )
         reset_trim.clicked.connect(self.reset_trim_requested.emit)
         options.addWidget(reset_trim)
-        reset = QPushButton("Reset appearance")
+        reset = QPushButton(tr("Reset appearance"))
         reset.setObjectName("link")
         reset.clicked.connect(self._reset_appearance)
         options.addWidget(reset)
@@ -422,7 +445,7 @@ class SettingsWindow(QWidget):
         calibration_layout = QVBoxLayout(calibration_card)
         calibration_layout.setContentsMargins(18, 16, 18, 16)
         calibration_layout.setSpacing(9)
-        calibration_title = QLabel("Calibration")
+        calibration_title = QLabel(tr("Calibration"))
         calibration_title.setObjectName("section")
         calibration_layout.addWidget(calibration_title)
         self.calibration_help = QLabel(self._calibration_help_text())
@@ -431,22 +454,26 @@ class SettingsWindow(QWidget):
         calibration_layout.addWidget(self.calibration_help)
         calibration_actions = QHBoxLayout()
         calibration_actions.setSpacing(10)
-        self.calibrate_button = QPushButton("Calibrate now")
+        self.calibrate_button = QPushButton(tr("Calibrate now"))
         self.calibrate_button.setObjectName("accent")
         self.calibrate_button.clicked.connect(self.calibrate_requested.emit)
         calibration_actions.addWidget(self.calibrate_button)
         calibration_actions.addStretch(1)
-        camera_label = QLabel("Camera")
+        camera_label = QLabel(tr("Camera"))
         camera_label.setObjectName("muted")
         calibration_actions.addWidget(camera_label)
         self.camera_spin = QSpinBox()
         self.camera_spin.setRange(0, 9)
         self.camera_spin.setFixedWidth(54)
-        self.camera_spin.setToolTip("Webcam index (try 1 if the built-in camera is not 0).")
+        self.camera_spin.setToolTip(
+            tr("Webcam index (try 1 if the built-in camera is not 0).")
+        )
         calibration_actions.addWidget(self.camera_spin)
-        self.restart_camera_button = QPushButton("Apply")
+        self.restart_camera_button = QPushButton(tr("Apply"))
         self.restart_camera_button.setObjectName("ghost")
-        self.restart_camera_button.setToolTip("Restart the camera with this index.")
+        self.restart_camera_button.setToolTip(
+            tr("Restart the camera with this index.")
+        )
         self.restart_camera_button.clicked.connect(self._restart_camera)
         calibration_actions.addWidget(self.restart_camera_button)
         calibration_layout.addLayout(calibration_actions)
@@ -458,22 +485,22 @@ class SettingsWindow(QWidget):
         hotkey_layout = QVBoxLayout(hotkey_card)
         hotkey_layout.setContentsMargins(18, 14, 18, 16)
         hotkey_layout.setSpacing(8)
-        hotkey_title = QLabel("Hotkeys — work anywhere")
+        hotkey_title = QLabel(tr("Hotkeys — work anywhere"))
         hotkey_title.setObjectName("section")
         hotkey_layout.addWidget(hotkey_title)
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(6)
         rows = [
-            ("Ctrl + Alt + L", "Show / hide the lens"),
-            ("Ctrl + Alt + F", "Freeze / unfreeze"),
-            ("Ctrl + Alt + C", "Calibrate"),
-            ("Ctrl + Alt + D", "Correct / drag the lens"),
-            ("Ctrl + Alt + Wheel", "Fine-tune lens position"),
-            ("Ctrl + Alt + 0", "Reset fine-tune trim"),
-            ("Ctrl + Alt + B", "Big lens on / off"),
-            ("Ctrl + Alt + = / -", "Zoom in / out"),
-            ("Ctrl + Alt + ] / [", "Grow / shrink lens"),
+            ("Ctrl + Alt + L", tr("Show / hide the lens")),
+            ("Ctrl + Alt + F", tr("Freeze / unfreeze")),
+            ("Ctrl + Alt + C", tr("Calibrate")),
+            ("Ctrl + Alt + D", tr("Correct / drag the lens")),
+            ("Ctrl + Alt + Wheel", tr("Fine-tune lens position")),
+            ("Ctrl + Alt + 0", tr("Reset fine-tune trim")),
+            ("Ctrl + Alt + B", tr("Big lens on / off")),
+            ("Ctrl + Alt + = / -", tr("Zoom in / out")),
+            ("Ctrl + Alt + ] / [", tr("Grow / shrink lens")),
         ]
         for index, (keys, description) in enumerate(rows):
             keycap = QLabel(keys)
@@ -488,11 +515,11 @@ class SettingsWindow(QWidget):
         layout.addWidget(hotkey_card)
 
         footer = QHBoxLayout()
-        privacy = QLabel("Runs fully offline · webcam stays local")
+        privacy = QLabel(tr("Runs fully offline · webcam stays local"))
         privacy.setObjectName("muted")
         footer.addWidget(privacy)
         footer.addStretch(1)
-        quit_button = QPushButton("Quit eyeLens")
+        quit_button = QPushButton(tr("Quit eyeLens"))
         quit_button.setObjectName("danger")
         quit_button.clicked.connect(self.quit_requested.emit)
         footer.addWidget(quit_button)
@@ -511,7 +538,7 @@ class SettingsWindow(QWidget):
         row = QHBoxLayout()
         row.setSpacing(12)
         label = QLabel(title)
-        label.setFixedWidth(84)
+        label.setMinimumWidth(84)
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setRange(minimum, maximum)
         slider.setSingleStep(step)
@@ -531,14 +558,14 @@ class SettingsWindow(QWidget):
 
     def _calibration_help_text(self) -> str:
         if self.settings.control_mode == "head":
-            return (
+            return tr(
                 "Aim your head at 25 dots, then 9 accuracy-check dots (about 45 "
                 "seconds). Turn or move your head until you are facing each dot, "
                 "then hold still. eyeLens learns how your head maps to this "
                 "screen and reports the error it measured. Your camera feed "
                 "never leaves this computer."
             )
-        return (
+        return tr(
             "Look at 25 dots, then 9 accuracy-check dots (about 80 seconds). "
             "For each dot, hold still for a moment, then slowly move your head "
             "left and right while keeping your eyes on it. eyeLens learns how "
@@ -559,6 +586,12 @@ class SettingsWindow(QWidget):
             return
         self.settings.control_mode = mode
         self._update_calibration_help()
+        self._commit()
+
+    def _on_language(self, _index: int) -> None:
+        if self._syncing:
+            return
+        self.settings.language = str(self.language_combo.currentData() or "auto")
         self._commit()
 
     def _apply_styles(self) -> None:
@@ -788,6 +821,9 @@ class SettingsWindow(QWidget):
             control_index = self.control_combo.findData(self.settings.control_mode)
             if control_index >= 0:
                 self.control_combo.setCurrentIndex(control_index)
+            language_index = self.language_combo.findData(self.settings.language)
+            if language_index >= 0:
+                self.language_combo.setCurrentIndex(language_index)
             self._update_value_labels()
             self._update_calibration_help()
         finally:
@@ -805,9 +841,9 @@ class SettingsWindow(QWidget):
         self.correct_button.setEnabled(info.can_correct)
         self.big_button.setEnabled(info.can_big)
         self.calibrate_button.setText(
-            "Calibrate now"
-            if info.calibration_text in ("Not calibrated", "Pointer mode")
-            else "Recalibrate"
+            tr("Calibrate now")
+            if info.calibration_state in ("none", "pointer")
+            else tr("Recalibrate")
         )
         self.camera_spin.setEnabled(not info.demo)
         self.restart_camera_button.setEnabled(not info.demo)
@@ -818,27 +854,27 @@ class SettingsWindow(QWidget):
         finally:
             self._syncing = False
         if info.demo:
-            self.preview.set_placeholder("Mouse demo — camera off")
+            self.preview.set_placeholder(tr("Mouse demo — camera off"))
             self.preview.set_live(False)
             self.preview.set_image(None)
         elif self.tracker is None:
-            self.preview.set_placeholder("Camera off")
+            self.preview.set_placeholder(tr("Camera off"))
             self.preview.set_live(False)
             self.preview.set_image(None)
         elif self.tracker.error_text:
-            self.preview.set_placeholder("Camera error")
+            self.preview.set_placeholder(tr("Camera error"))
             self.preview.set_live(False)
             self.preview.set_image(None)
         elif not self.tracker.isRunning():
-            self.preview.set_placeholder("Camera stopped")
+            self.preview.set_placeholder(tr("Camera stopped"))
             self.preview.set_live(False)
             self.preview.set_image(None)
         elif not self.tracker.is_ready:
-            self.preview.set_placeholder("Starting camera…")
+            self.preview.set_placeholder(tr("Starting camera…"))
             self.preview.set_live(False)
             self.preview.set_image(None)
         else:
-            self.preview.set_placeholder("Starting camera…")
+            self.preview.set_placeholder(tr("Starting camera…"))
 
     def set_locked(self, locked: bool) -> None:
         self._syncing = True
@@ -872,17 +908,19 @@ class SettingsWindow(QWidget):
         self.zoom_value.setText(f"{self.settings.zoom:.2f}×")
         smoothing = self.settings.smoothing
         if smoothing < 0.25:
-            smoothing_text = "Fast"
+            smoothing_text = tr("Fast")
         elif smoothing < 0.55:
-            smoothing_text = "Balanced"
+            smoothing_text = tr("Balanced")
         elif smoothing < 0.80:
-            smoothing_text = "Smooth"
+            smoothing_text = tr("Smooth")
         else:
-            smoothing_text = "Very smooth"
+            smoothing_text = tr("Very smooth")
         self.smoothing_value.setText(smoothing_text)
         self.opacity_value.setText(f"{int(round(self.settings.opacity * 100))}%")
         self.zoom_slider.setToolTip(
-            f"Magnification: {self.settings.zoom:.2f}× of the area under the lens."
+            tr("Magnification: {zoom:.2f}× of the area under the lens.").format(
+                zoom=self.settings.zoom
+            )
         )
 
     def _on_size(self, value: int) -> None:

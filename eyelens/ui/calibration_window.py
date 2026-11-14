@@ -30,6 +30,7 @@ from ..gaze.features import (
 )
 from ..gaze.model import POSE_ALPHAS, GazeModel, fit_pose_correction
 from ..gaze.tracker import EyeTracker
+from ..i18n import tr
 from .overlay import screen_info
 
 BRAND = QColor("#38bdf8")
@@ -101,7 +102,13 @@ class CalibrationWindow(QWidget):
             self._settle_seconds = self.SETTLE_SECONDS
             self._sample_seconds = self.SAMPLE_SECONDS
             self._stable_seconds = self.STABLE_SECONDS
-        self.setWindowTitle("eyeLens head calibration")
+        self.setWindowTitle(
+            tr(
+                "eyeLens head calibration"
+                if self._head_control
+                else "eyeLens eye calibration"
+            )
+        )
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -150,7 +157,7 @@ class CalibrationWindow(QWidget):
         self._validating = False
         self._validation_start = 0
         self._countdown_seconds = self.COUNTDOWN_SECONDS
-        self._countdown_note = (
+        self._countdown_note = tr(
             "Get comfortable and keep your face in view"
             if self._head_control
             else "Get comfortable and keep looking at the screen"
@@ -346,7 +353,7 @@ class CalibrationWindow(QWidget):
         self._validating = False
         self._validation_start = 0
         self._countdown_seconds = self.COUNTDOWN_SECONDS
-        self._countdown_note = (
+        self._countdown_note = tr(
             "Get comfortable and keep your face in view"
             if self._head_control
             else "Get comfortable and keep looking at the screen"
@@ -378,7 +385,7 @@ class CalibrationWindow(QWidget):
         self._fit_started = False
         self._fit_stage = "final"
         self._countdown_seconds = 1.5
-        self._countdown_note = (
+        self._countdown_note = tr(
             "Accuracy check — aim your head at each dot"
             if self._head_control
             else "Accuracy check — keep looking at the screen"
@@ -393,19 +400,19 @@ class CalibrationWindow(QWidget):
             if not self._retried:
                 self._retried = True
                 if self._head_warning:
-                    self._retry_reason = (
+                    self._retry_reason = tr(
                         "Head moved — return to your starting head position "
                         "and keep still. Trying this point again…"
                     )
                 else:
-                    self._retry_reason = (
+                    self._retry_reason = tr(
                         "Hold still — I lost your face. Trying this point again…"
                         if accepted is None
                         else "Not enough steady samples. Trying this point again…"
                     )
                 self._enter(Phase.RETRY)
             else:
-                self._error_message = (
+                self._error_message = tr(
                     "Head tracking was not stable enough. Improve the lighting "
                     "and make sure your face is fully visible."
                     if self._head_control
@@ -701,7 +708,9 @@ class CalibrationWindow(QWidget):
             self._point_index = len(self._points)
             self._enter(Phase.RESULT)
         except (ValueError, IndexError) as exc:
-            self._error_message = f"Could not build the calibration model: {exc}"
+            self._error_message = tr(
+                "Could not build the calibration model: {exc}"
+            ).format(exc=exc)
             self._enter(Phase.ERROR)
 
     def _filter_samples(
@@ -960,7 +969,11 @@ class CalibrationWindow(QWidget):
             self._paint_countdown(painter, width, height)
         elif self._phase in (Phase.RETRY,):
             self._paint_center_message(
-                painter, width, height, self._retry_reason or "Trying again…", AMBER
+                painter,
+                width,
+                height,
+                self._retry_reason or tr("Trying again…"),
+                AMBER,
             )
         elif self._phase == Phase.FIT:
             self._paint_busy(painter, width, height)
@@ -978,7 +991,7 @@ class CalibrationWindow(QWidget):
         painter.drawText(
             QRectF(0, 30, width, 36),
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
-            (
+            tr(
                 "eyeLens head calibration"
                 if self._head_control
                 else "eyeLens eye calibration"
@@ -990,30 +1003,35 @@ class CalibrationWindow(QWidget):
             Phase.SETTLE,
             Phase.SAMPLE,
         ):
-            subtitle = "Head moved — return to your starting head position."
+            subtitle = tr("Head moved — return to your starting head position.")
             subtitle_color = AMBER
         elif self._phase == Phase.RESULT:
-            subtitle = "Calibration complete — this is the accuracy it measured."
+            subtitle = tr(
+                "Calibration complete — this is the accuracy it measured."
+            )
         elif self._phase == Phase.FIT:
-            model_name = "head" if self._head_control else "gaze"
-            subtitle = (
+            subtitle = tr(
                 "Finishing your calibration…"
                 if self._fit_stage == "final"
-                else f"Building your personal {model_name} model…"
+                else (
+                    "Building your personal head model…"
+                    if self._head_control
+                    else "Building your personal gaze model…"
+                )
             )
         elif self._validating:
-            subtitle = (
+            subtitle = tr(
                 "Accuracy check — aim your head at each dot and hold still."
                 if self._head_control
                 else "Accuracy check — look at each dot with your eyes only."
             )
         elif self._head_control:
-            subtitle = (
+            subtitle = tr(
                 "Turn or move your head to face the highlighted dot, then "
                 "hold still."
             )
         else:
-            subtitle = (
+            subtitle = tr(
                 "Hold still, then slowly move your head left and right while "
                 "keeping your eyes on the dot."
             )
@@ -1034,7 +1052,9 @@ class CalibrationWindow(QWidget):
             painter.setFont(counter_font)
             text = f"{current} / {total}"
             if self._validating and self._phase not in (Phase.RESULT, Phase.ERROR):
-                text = f"check {current} / {total}"
+                text = tr("check {current} / {total}").format(
+                    current=current, total=total
+                )
             if self._phase in (Phase.RESULT, Phase.ERROR):
                 text = f"{total} / {total}"
             painter.drawText(
@@ -1066,30 +1086,30 @@ class CalibrationWindow(QWidget):
         painter.drawText(
             pill.adjusted(28, 0, -8, 0),
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-            "Face detected" if self._face_found else "Face not found",
+            tr("Face detected") if self._face_found else tr("Face not found"),
         )
 
         if self._phase == Phase.SETTLE or self._phase == Phase.SAMPLE:
             if self._head_control:
                 if self._phase == Phase.SAMPLE:
-                    hint = "Hold your head still — sampling this position…"
+                    hint = tr("Hold your head still — sampling this position…")
                 else:
-                    hint = "Aim your head at the highlighted dot…"
+                    hint = tr("Aim your head at the highlighted dot…")
             elif self._phase == Phase.SAMPLE:
                 sample_elapsed = time.monotonic() - self._phase_started
                 if sample_elapsed < self._stable_seconds:
-                    hint = "Hold your gaze — sampling stable position…"
+                    hint = tr("Hold your gaze — sampling stable position…")
                 else:
-                    hint = (
+                    hint = tr(
                         "Keep your eyes on the dot — slowly move your head "
                         "left and right…"
                     )
             else:
-                hint = "Look at the highlighted dot…"
+                hint = tr("Look at the highlighted dot…")
             if self._validating:
-                hint = "Accuracy check · " + hint
+                hint = tr("Accuracy check · ") + hint
             if self._head_warning:
-                hint = "Head moved — return to your starting head position"
+                hint = tr("Head moved — return to your starting head position")
                 painter.setPen(AMBER)
             else:
                 painter.setPen(MUTED)
@@ -1097,7 +1117,7 @@ class CalibrationWindow(QWidget):
             painter.drawText(
                 QRectF(0, height - 52, width, 22),
                 Qt.AlignmentFlag.AlignHCenter,
-                hint + "   ·   Esc to cancel",
+                hint + tr("   ·   Esc to cancel"),
             )
         elif self._phase in (Phase.INTRO, Phase.COUNTDOWN):
             painter.setPen(QColor(120, 140, 160))
@@ -1105,7 +1125,7 @@ class CalibrationWindow(QWidget):
             painter.drawText(
                 QRectF(0, height - 52, width, 22),
                 Qt.AlignmentFlag.AlignHCenter,
-                "Esc to cancel",
+                tr("Esc to cancel"),
             )
 
     def _paint_preview(self, painter: QPainter) -> None:
@@ -1131,7 +1151,9 @@ class CalibrationWindow(QWidget):
         else:
             painter.setPen(MUTED)
             painter.setFont(QFont("Segoe UI", 9))
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "camera preview")
+            painter.drawText(
+                rect, Qt.AlignmentFlag.AlignCenter, tr("camera preview")
+            )
 
         # Small whole-face inset so the user can still check framing.  Head
         # control already shows the whole face, so it is not needed there.
@@ -1151,7 +1173,7 @@ class CalibrationWindow(QWidget):
             painter.drawText(
                 inset.adjusted(4, 0, -4, -2),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
-                "FACE",
+                tr("FACE"),
             )
         painter.restore()
 
@@ -1166,7 +1188,7 @@ class CalibrationWindow(QWidget):
             and self._eye_preview is not None
             and not self._eye_preview.isNull()
         )
-        preview_label = (
+        preview_label = tr(
             "FACE" if self._head_control else "EYES" if has_eyes else "CAMERA"
         )
         painter.drawText(
@@ -1265,7 +1287,8 @@ class CalibrationWindow(QWidget):
                 painter.drawEllipse(point, 4, 4)
 
     def _paint_intro(self, painter: QPainter, width: float, height: float) -> None:
-        card = QRectF(width / 2 - 280, height * 0.52 - 92, 560, 184)
+        # Tall enough for the longer Russian instructions without clipping.
+        card = QRectF(width / 2 - 280, height * 0.52 - 130, 560, 260)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(8, 18, 32, 210))
         painter.drawRoundedRect(card, 20, 20)
@@ -1280,12 +1303,12 @@ class CalibrationWindow(QWidget):
         painter.drawText(
             card.adjusted(24, 22, -24, -110),
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
-            "Ready when you are",
+            tr("Ready when you are"),
         )
         painter.setFont(QFont("Segoe UI", 10))
         painter.setPen(MUTED)
         if self._head_control:
-            instructions = (
+            instructions = tr(
                 "Sit at a comfortable distance from the screen. Your face should "
                 "be well lit and fully visible in the camera preview. You will "
                 "aim your head at 25 dots, then 9 accuracy-check dots (about 45 "
@@ -1295,7 +1318,7 @@ class CalibrationWindow(QWidget):
                 "detected."
             )
         else:
-            instructions = (
+            instructions = tr(
                 "Sit at a comfortable distance from the screen. Your face should "
                 "be well lit and fully visible in the camera preview. You will "
                 "look at 25 dots, then 9 accuracy-check dots (about 80 "
@@ -1305,7 +1328,7 @@ class CalibrationWindow(QWidget):
                 "starts automatically once your face is detected."
             )
         painter.drawText(
-            card.adjusted(34, 62, -34, -60),
+            card.adjusted(34, 62, -34, -88),
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
             | Qt.TextFlag.TextWordWrap,
             instructions,
@@ -1316,12 +1339,12 @@ class CalibrationWindow(QWidget):
         hint_font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(hint_font)
         hint = (
-            "Press Space to begin now"
+            tr("Press Space to begin now")
             if self._face_found
-            else "Waiting for your face…"
+            else tr("Waiting for your face…")
         )
         painter.drawText(
-            card.adjusted(24, 128, -24, -20),
+            card.adjusted(24, 196, -24, -20),
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
             hint,
         )
@@ -1392,11 +1415,14 @@ class CalibrationWindow(QWidget):
         painter.drawText(
             QRectF(center.x() - 260, center.y() + 60, 520, 30),
             Qt.AlignmentFlag.AlignCenter,
-            (
+            tr(
                 "Checking accuracy on independent points…"
                 if self._fit_stage == "final"
-                else f"Building your personal "
-                f"{'head' if self._head_control else 'gaze'} model…"
+                else (
+                    "Building your personal head model…"
+                    if self._head_control
+                    else "Building your personal gaze model…"
+                )
             ),
         )
 
@@ -1421,7 +1447,7 @@ class CalibrationWindow(QWidget):
         painter.drawText(
             card.adjusted(24, 30, -24, -250),
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
-            "Calibration complete",
+            tr("Calibration complete"),
         )
 
         painter.setPen(TEXT)
@@ -1440,23 +1466,22 @@ class CalibrationWindow(QWidget):
         painter.drawText(
             QRectF(card.left(), card.top() + 148, card.width(), 28),
             Qt.AlignmentFlag.AlignHCenter,
-            model.quality_label,
+            tr(model.quality_label),
         )
         painter.setPen(MUTED)
         painter.setFont(QFont("Segoe UI", 9))
         checked = model.metrics.validation_points > 0
         if checked and model.metrics.pose_weight > 0:
-            where = (
-                f"Checked on {model.metrics.validation_points} held-out points "
-                "(head-pose corrected)"
-            )
+            where = tr(
+                "Checked on {points} held-out points (head-pose corrected)"
+            ).format(points=model.metrics.validation_points)
         elif checked:
-            where = (
-                f"Checked on {model.metrics.validation_points} independent points"
+            where = tr("Checked on {points} independent points").format(
+                points=model.metrics.validation_points
             )
         else:
-            where = "Estimated across the whole screen"
-        advice = (
+            where = tr("Estimated across the whole screen")
+        advice = tr(
             "Turn your head toward each dot and hold still for a sharper lens."
             if not good and self._head_control
             else (
@@ -1468,8 +1493,12 @@ class CalibrationWindow(QWidget):
         painter.drawText(
             QRectF(card.left() + 40, card.top() + 182, card.width() - 80, 52),
             Qt.AlignmentFlag.AlignHCenter | Qt.TextFlag.TextWordWrap,
-            f"{where} ({model.metrics.n_points} points, "
-            f"{model.metrics.n_samples} samples). {advice}",
+            tr("{where} ({points} points, {samples} samples). {advice}").format(
+                where=where,
+                points=model.metrics.n_points,
+                samples=model.metrics.n_samples,
+                advice=advice,
+            ),
         )
 
         painter.setPen(BRAND_SOFT)
@@ -1479,7 +1508,7 @@ class CalibrationWindow(QWidget):
         painter.drawText(
             QRectF(card.left() + 24, card.bottom() - 62, card.width() - 48, 24),
             Qt.AlignmentFlag.AlignHCenter,
-            (
+            tr(
                 "Enter  —  use this calibration"
                 if good
                 else "R  —  try again"
@@ -1490,7 +1519,7 @@ class CalibrationWindow(QWidget):
         painter.drawText(
             QRectF(card.left() + 24, card.bottom() - 34, card.width() - 48, 22),
             Qt.AlignmentFlag.AlignHCenter,
-            (
+            tr(
                 "R — start over    ·    Esc — cancel"
                 if good
                 else "Esc — cancel"
@@ -1512,7 +1541,7 @@ class CalibrationWindow(QWidget):
         painter.drawText(
             card.adjusted(24, 26, -24, -160),
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
-            "Calibration needs another try",
+            tr("Calibration needs another try"),
         )
         painter.setPen(TEXT)
         painter.setFont(QFont("Segoe UI", 10))
@@ -1520,7 +1549,7 @@ class CalibrationWindow(QWidget):
             card.adjusted(40, 72, -40, -64),
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
             | Qt.TextFlag.TextWordWrap,
-            self._error_message or "Something went wrong.",
+            self._error_message or tr("Something went wrong."),
         )
         painter.setPen(BRAND_SOFT)
         font = QFont("Segoe UI", 10)
@@ -1529,7 +1558,7 @@ class CalibrationWindow(QWidget):
         painter.drawText(
             QRectF(card.left(), card.bottom() - 46, card.width(), 26),
             Qt.AlignmentFlag.AlignHCenter,
-            "R — try again    ·    Esc — cancel",
+            tr("R — try again    ·    Esc — cancel"),
         )
 
     # ----------------------------------------------------------------- preview

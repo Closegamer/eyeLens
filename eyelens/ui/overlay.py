@@ -27,6 +27,7 @@ from PySide6.QtWidgets import QWidget
 from ..capture import ScreenCapture, source_extent
 from ..config import ScreenInfo, Settings, lens_dimensions
 from ..gaze.engine import GazeEngine
+from ..i18n import tr
 from .correction_handle import CorrectionHandle
 
 
@@ -216,17 +217,15 @@ class LensOverlay(QWidget):
     def toggle_locked(self) -> None:
         self._locked = not self._locked
         if self.engine.demo or self.engine.pointer_fallback:
-            follows = "the pointer"
+            message = tr("Lens follows the pointer")
         elif (
             self.engine.model is not None
             and self.engine.model.control_mode == "head"
         ):
-            follows = "your head"
+            message = tr("Lens follows your head")
         else:
-            follows = "your gaze"
-        self.flash_osd(
-            "Lens locked" if self._locked else f"Lens follows {follows}"
-        )
+            message = tr("Lens follows your gaze")
+        self.flash_osd(tr("Lens locked") if self._locked else message)
         self._update_paint()
 
     @property
@@ -259,7 +258,9 @@ class LensOverlay(QWidget):
         self._handle.set_center(self._global_center())
         self._handle.show()
         self._handle.raise_()
-        self.flash_osd("Drag the handle to where you are looking", duration=4.0)
+        self.flash_osd(
+            tr("Drag the handle to where you are looking"), duration=4.0
+        )
         self.correction_started.emit()
         return True
 
@@ -270,7 +271,7 @@ class LensOverlay(QWidget):
         self._correction_hold = False
         if self._handle is not None:
             self._handle.hide()
-        self.flash_osd("Correction cancelled")
+        self.flash_osd(tr("Correction cancelled"))
         self.correction_cancelled.emit()
         return True
 
@@ -281,7 +282,7 @@ class LensOverlay(QWidget):
         if self._handle is not None:
             self._handle.hide()
         self.flash_osd(
-            "Correction learned" if success else "Correction not learned",
+            tr("Correction learned") if success else tr("Correction not learned"),
             duration=1.8 if success else 2.2,
         )
 
@@ -335,7 +336,9 @@ class LensOverlay(QWidget):
             and self.engine.model.control_mode == "head"
         )
         self.flash_osd(
-            "Keep facing the lens…" if head_control else "Hold your gaze on the lens…",
+            tr("Keep facing the lens…")
+            if head_control
+            else tr("Hold your gaze on the lens…"),
             duration=1.2,
         )
         self.correction_committed.emit(target.x(), target.y())

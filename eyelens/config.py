@@ -13,6 +13,8 @@ from typing import Any
 
 from platformdirs import user_config_dir, user_data_dir
 
+from .i18n import LANGUAGE_OPTIONS
+
 APP_NAME = "eyeLens"
 MODEL_FILE_NAME = "face_landmarker.task"
 MODEL_URL = (
@@ -135,6 +137,7 @@ class Settings:
     lens_visible: bool = True
     camera_index: int = 0
     control_mode: str = "head"
+    language: str = "auto"
     # Manual fine trim added to camera-driven predictions, in logical pixels.
     trim_x: int = 0
     trim_y: int = 0
@@ -183,6 +186,8 @@ class Settings:
         self.control_mode = (
             control if control in self.CONTROL_MODE_OPTIONS else "head"
         )
+        language = str(self.language).strip().lower()
+        self.language = language if language in LANGUAGE_OPTIONS else "auto"
         self.zoom = round(_clamp(float(self.zoom), *self.ZOOM_RANGE), 2)
         self.smoothing = _clamp(float(self.smoothing), *self.SMOOTHING_RANGE)
         self.opacity = _clamp(float(self.opacity), *self.OPACITY_RANGE)

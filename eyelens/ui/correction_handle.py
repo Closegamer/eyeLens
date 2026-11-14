@@ -13,6 +13,8 @@ from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QRadialGradient
 from PySide6.QtWidgets import QWidget
 
+from ..i18n import tr
+
 
 class CorrectionHandle(QWidget):
     """A tiny always-on-top handle that can be dragged anywhere on screen.
@@ -39,7 +41,7 @@ class CorrectionHandle(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setCursor(Qt.CursorShape.SizeAllCursor)
-        self.setToolTip("Drag to where you are looking, then release")
+        self.setToolTip(tr("Drag to where you are looking, then release"))
         self.setFixedSize(self.SIZE, self.SIZE)
         self.setWindowTitle("eyeLens correction handle")
         self._dragging = False
