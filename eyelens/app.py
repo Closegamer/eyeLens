@@ -135,7 +135,13 @@ class EyeLensApp(QObject):
             QTimer.singleShot(7000, self._check_camera_fallback)
         self._sync_tray_menu()
 
-        if self.demo or self.model is not None:
+        if self.model is None and not self.demo:
+            # Fresh install: keep the lens on screen and usable with the pointer
+            # until the first calibration replaces it with eye/head control.
+            self._pointer_fallback = True
+            self.engine.set_pointer_fallback(True)
+
+        if self.demo or self.model is not None or self._pointer_fallback:
             self.overlay.show()
             self.overlay.raise_()
             if self.tracker is not None:
