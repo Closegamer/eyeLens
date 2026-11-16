@@ -8,7 +8,9 @@
 AppId={{F1AAE574-6377-46F7-B91E-30CADA1EC1E9}
 AppName=eyeLens
 AppVersion={#AppVersion}
-AppPublisher=eyeLens contributors
+AppPublisher=Closegamer
+AppContact=closegamer@mail.ru
+AppCopyright=Copyright (C) 2026 Closegamer
 AppPublisherURL=https://github.com/Closegamer/eyeLens
 AppSupportURL=https://github.com/Closegamer/eyeLens/issues
 AppUpdatesURL=https://github.com/Closegamer/eyeLens/releases
@@ -27,6 +29,9 @@ UninstallDisplayIcon={app}\eyeLens.exe
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+VersionInfoCompany=Closegamer
+VersionInfoCopyright=Copyright (C) 2026 Closegamer
+VersionInfoDescription=eyeLens Setup
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

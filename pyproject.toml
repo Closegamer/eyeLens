@@ -9,7 +9,7 @@ description = "A webcam-controlled magnifying lens overlay for Windows desktops"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = { text = "MIT" }
-authors = [{ name = "eyeLens contributors" }]
+authors = [{ name = "Closegamer", email = "closegamer@mail.ru" }]
 keywords = ["eye-tracking", "magnifier", "accessibility", "webcam", "overlay"]
 classifiers = [
     "Development Status :: 3 - Alpha",
