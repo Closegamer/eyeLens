@@ -22,3 +22,7 @@ htmlcov/
 settings.json
 calibration.json
 state.json
+
+# Local session notes
+continue_session.md
+plans/
