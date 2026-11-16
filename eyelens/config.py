@@ -148,7 +148,7 @@ class Settings:
 
     DIAMETER_RANGE = (120, 1200)
     SHAPE_OPTIONS = ("round", "square", "wide")
-    CONTROL_MODE_OPTIONS = ("head", "eyes")
+    CONTROL_MODE_OPTIONS = ("head",)
     WIDE_ASPECT = 1.6
     ZOOM_RANGE = (1.0, 6.0)
     SMOOTHING_RANGE = (0.0, 1.0)

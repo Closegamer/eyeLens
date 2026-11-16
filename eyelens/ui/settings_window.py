@@ -340,26 +340,6 @@ class SettingsWindow(QWidget):
         lens_header.addWidget(self.show_lens)
         lens_layout.addLayout(lens_header)
 
-        control_row = QHBoxLayout()
-        control_row.setSpacing(12)
-        control_label = QLabel(tr("Control"))
-        control_label.setMinimumWidth(84)
-        self.control_combo = QComboBox()
-        self.control_combo.addItem(tr("Head"), "head")
-        self.control_combo.addItem(tr("Eyes"), "eyes")
-        self.control_combo.setToolTip(
-            tr(
-                "Head: move or turn your head to move the lens (recommended). "
-                "Eyes: follow your gaze. Switching mode requires recalibration. "
-                "If no camera is available, the lens automatically follows the "
-                "mouse or a finger on the touchscreen."
-            )
-        )
-        self.control_combo.currentIndexChanged.connect(self._on_control_mode)
-        control_row.addWidget(control_label)
-        control_row.addWidget(self.control_combo, 1)
-        lens_layout.addLayout(control_row)
-
         shape_row = QHBoxLayout()
         shape_row.setSpacing(12)
         shape_label = QLabel(tr("Shape"))
@@ -557,36 +537,13 @@ class SettingsWindow(QWidget):
         return slider, value
 
     def _calibration_help_text(self) -> str:
-        if self.settings.control_mode == "head":
-            return tr(
-                "Aim your head at 25 dots, then 9 accuracy-check dots (about 45 "
-                "seconds). Turn or move your head until you are facing each dot, "
-                "then hold still. eyeLens learns how your head maps to this "
-                "screen and reports the error it measured. Your camera feed "
-                "never leaves this computer."
-            )
         return tr(
-            "Look at 25 dots, then 9 accuracy-check dots (about 80 seconds). "
-            "For each dot, hold still for a moment, then slowly move your head "
-            "left and right while keeping your eyes on it. eyeLens learns how "
-            "your eyes map to this screen, including head-position changes, and "
-            "reports the error it measured. Your camera feed never leaves this "
-            "computer."
+            "Aim your head at 25 dots, then 9 accuracy-check dots (about 45 "
+            "seconds). Turn or move your head until you are facing each dot, "
+            "then hold still. eyeLens learns how your head maps to this "
+            "screen and reports the error it measured. Your camera feed "
+            "never leaves this computer."
         )
-
-    def _update_calibration_help(self) -> None:
-        if hasattr(self, "calibration_help"):
-            self.calibration_help.setText(self._calibration_help_text())
-
-    def _on_control_mode(self, _index: int) -> None:
-        if self._syncing:
-            return
-        mode = str(self.control_combo.currentData() or "head")
-        if mode == self.settings.control_mode:
-            return
-        self.settings.control_mode = mode
-        self._update_calibration_help()
-        self._commit()
 
     def _on_language(self, _index: int) -> None:
         if self._syncing:
@@ -818,14 +775,10 @@ class SettingsWindow(QWidget):
             self.osd_checkbox.setChecked(self.settings.show_osd)
             self.show_lens.setChecked(self.settings.lens_visible)
             self.camera_spin.setValue(self.settings.camera_index)
-            control_index = self.control_combo.findData(self.settings.control_mode)
-            if control_index >= 0:
-                self.control_combo.setCurrentIndex(control_index)
             language_index = self.language_combo.findData(self.settings.language)
             if language_index >= 0:
                 self.language_combo.setCurrentIndex(language_index)
             self._update_value_labels()
-            self._update_calibration_help()
         finally:
             self._syncing = False
 

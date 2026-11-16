@@ -31,12 +31,11 @@ def test_settings_normalization() -> None:
     assert normalized.trim_y == -Settings.TRIM_RANGE
 
 
-def test_settings_control_mode_roundtrip(tmp_path) -> None:
+def test_settings_control_mode_is_head_only(tmp_path) -> None:
     path = tmp_path / "settings.json"
     original = Settings(control_mode="eyes")
     original.save(path)
-    loaded = Settings.load(path)
-    assert loaded.control_mode == "eyes"
+    assert Settings.load(path).control_mode == "head"
     assert Settings().control_mode == "head"
 
 
