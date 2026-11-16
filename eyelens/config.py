@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import time
 import urllib.request
@@ -60,6 +61,9 @@ def model_search_paths() -> list[Path]:
     root = _repo_root()
     if root is not None:
         paths.append(root / "models" / MODEL_FILE_NAME)
+    if getattr(sys, "frozen", False):
+        bundle = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        paths.append(bundle / "models" / MODEL_FILE_NAME)
     paths.append(data_dir() / "models" / MODEL_FILE_NAME)
     return paths
 

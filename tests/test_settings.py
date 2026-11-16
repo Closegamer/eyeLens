@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from eyelens import config
 from eyelens.config import (
     ScreenInfo,
     Settings,
@@ -83,3 +84,11 @@ def test_screen_matching() -> None:
 def test_screen_dict_roundtrip() -> None:
     original = ScreenInfo("DISPLAY1", 10, 20, 1280, 720, 1.5)
     assert ScreenInfo.from_dict(original.to_dict()) == original
+
+
+def test_frozen_build_finds_bundled_model(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(config.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(config.sys, "_MEIPASS", str(tmp_path), raising=False)
+    monkeypatch.setattr(config, "data_dir", lambda: tmp_path)
+    bundled = tmp_path / "models" / config.MODEL_FILE_NAME
+    assert bundled in config.model_search_paths()
