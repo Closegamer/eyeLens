@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-import os
 import sys
 
-# A windowed build has no stdout/stderr; prints in error paths must not crash.
-if sys.stdout is None:
-    sys.stdout = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115 - lives with the process
-if sys.stderr is None:
-    sys.stderr = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115 - lives with the process
+# A windowed build has no stdout/stderr; log errors instead of crashing prints.
+if sys.stdout is None or sys.stderr is None:
+    from eyelens.config import config_dir
+
+    log = open(config_dir() / "eyeLens.log", "w", encoding="utf-8", buffering=1)  # noqa: SIM115 - lives with the process
+    if sys.stdout is None:
+        sys.stdout = log
+    if sys.stderr is None:
+        sys.stderr = log
 
 from eyelens.app import main
 

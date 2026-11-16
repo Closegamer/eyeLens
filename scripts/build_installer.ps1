@@ -28,11 +28,17 @@ try {
     & $python -m PyInstaller --noconfirm --clean --windowed --name eyeLens `
         --icon (Join-Path $root 'docs\icon.ico') `
         --add-data "$(Join-Path $root 'models\face_landmarker.task');models" `
+        --collect-all mediapipe.tasks.c `
         --paths $root --distpath (Join-Path $root 'dist') `
         --workpath (Join-Path $root 'build\pyinstaller') `
         --specpath (Join-Path $root 'build\pyinstaller') `
         --log-level WARN (Join-Path $root 'scripts\frozen_entry.py')
     if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed.' }
+
+    $mediapipeLib = Join-Path $root 'dist\eyeLens\_internal\mediapipe\tasks\c\libmediapipe.dll'
+    if (-not (Test-Path $mediapipeLib)) {
+        throw 'MediaPipe native library is missing from the frozen bundle.'
+    }
 
     & $Iscc "/DAppVersion=$version" (Join-Path $root 'installer\eyeLens.iss')
     if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed.' }
