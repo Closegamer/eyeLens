@@ -381,24 +381,24 @@ _RU: dict[str, str] = {
     "lit and fully visible in the camera preview. You will aim your head at 25 "
     "dots, then 9 accuracy-check dots (about 45 seconds). Turn or move your "
     "head until you are facing each dot, then hold still for a moment. Your "
-    "eyes are not used for control. Calibration starts automatically once your "
-    "face is detected.": "Сядьте удобно перед экраном. Лицо должно быть хорошо "
+    "eyes are not used for control. Press Space or click when you are ready to "
+    "start.": "Сядьте удобно перед экраном. Лицо должно быть хорошо "
     "освещено и полностью видно в камере. Вы направите голову на 25 точек, "
     "затем на 9 контрольных (около 45 секунд). Поворачивайте или наклоняйте "
     "голову к каждой точке и замирайте на мгновение. Глаза для управления не "
-    "используются. Калибровка начнётся автоматически, когда камера увидит лицо.",
+    "используются. Нажмите пробел или щёлкните, когда будете готовы начать.",
     "Sit at a comfortable distance from the screen. Your face should be well "
     "lit and fully visible in the camera preview. You will look at 25 dots, "
     "then 9 accuracy-check dots (about 80 seconds). For each dot, hold still "
     "for a moment, then slowly move your head a little left and right while "
-    "keeping your eyes on it. This teaches head-position compensation. "
-    "Calibration starts automatically once your face is detected.": "Сядьте "
+    "keeping your eyes on it. This teaches head-position compensation. Press "
+    "Space or click when you are ready to start.": "Сядьте "
     "удобно перед экраном. Лицо должно быть хорошо освещено и полностью видно "
     "в камере. Вы посмотрите на 25 точек, затем на 9 контрольных (около 80 "
     "секунд). На каждой точке замрите, затем медленно двигайте головой немного "
     "влево-вправо, не отводя глаз. Так eyeLens учитывает положение головы. "
-    "Калибровка начнётся автоматически, когда камера увидит лицо.",
-    "Press Space to begin now": "Нажмите пробел, чтобы начать",
+    "Нажмите пробел или щёлкните, когда будете готовы начать.",
+    "Press Space or click to begin": "Нажмите пробел или щёлкните, чтобы начать",
     "Waiting for your face…": "Ждём ваше лицо…",
     "Get comfortable and keep your face in view": "Устройтесь удобно, лицо "
     "должно быть в кадре",

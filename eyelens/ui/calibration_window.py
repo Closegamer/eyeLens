@@ -142,7 +142,6 @@ class CalibrationWindow(QWidget):
         self._all_openness: list[float] = []
         self._last_seq = -1
         self._face_found = False
-        self._face_since: float | None = None
         self._preview: QImage | None = None
         self._eye_preview: QImage | None = None
         self._model: GazeModel | None = None
@@ -819,24 +818,12 @@ class CalibrationWindow(QWidget):
         if warning_before != self._head_warning:
             self.update(QRect(0, 60, int(self.width()), 34))
             self.update(QRect(0, int(self.height()) - 60, int(self.width()), 34))
-        if snap.face_found:
-            if self._face_since is None:
-                self._face_since = now
-        else:
-            self._face_since = None
 
         if self.tracker.error_text and self._phase not in (Phase.ERROR, Phase.RESULT):
             self._error_message = self.tracker.error_text
             self._enter(Phase.ERROR)
 
-        if (
-            self._phase == Phase.INTRO
-            and self._face_found
-            and self._face_since is not None
-            and now - self._face_since >= 0.9
-        ):
-            self._begin_countdown()
-        elif self._phase == Phase.COUNTDOWN:
+        if self._phase == Phase.COUNTDOWN:
             if elapsed >= self._countdown_seconds:
                 self._start_point()
         elif self._phase == Phase.SETTLE:
@@ -1128,7 +1115,22 @@ class CalibrationWindow(QWidget):
                 tr("Esc to cancel"),
             )
 
+    def _preview_would_cover_point(self) -> bool:
+        if self._phase not in (Phase.SETTLE, Phase.SAMPLE, Phase.RETRY):
+            return False
+        if not 0 <= self._point_index < len(self._points):
+            return False
+        origin = self.screen.geometry().topLeft()
+        gx, gy = self._points[self._point_index]
+        point = QPointF(gx - origin.x(), gy - origin.y())
+        halo = QRectF(point.x() - 48, point.y() - 48, 96, 96)
+        return QRectF(self.PREVIEW_RECT).intersects(halo)
+
     def _paint_preview(self, painter: QPainter) -> None:
+        if self._preview_would_cover_point():
+            # The preview is in the top-left corner, where head-calibration
+            # targets can land.  Hide it so the active dot is never obscured.
+            return
         rect = QRectF(self.PREVIEW_RECT)
         path = QPainterPath()
         path.addRoundedRect(rect, 14, 14)
@@ -1314,8 +1316,7 @@ class CalibrationWindow(QWidget):
                 "aim your head at 25 dots, then 9 accuracy-check dots (about 45 "
                 "seconds). Turn or move your head until you are facing each dot, "
                 "then hold still for a moment. Your eyes are not used for "
-                "control. Calibration starts automatically once your face is "
-                "detected."
+                "control. Press Space or click when you are ready to start."
             )
         else:
             instructions = tr(
@@ -1324,8 +1325,8 @@ class CalibrationWindow(QWidget):
                 "look at 25 dots, then 9 accuracy-check dots (about 80 "
                 "seconds). For each dot, hold still for a moment, then slowly "
                 "move your head a little left and right while keeping your eyes "
-                "on it. This teaches head-position compensation. Calibration "
-                "starts automatically once your face is detected."
+                "on it. This teaches head-position compensation. Press Space or "
+                "click when you are ready to start."
             )
         painter.drawText(
             card.adjusted(34, 62, -34, -88),
@@ -1339,7 +1340,7 @@ class CalibrationWindow(QWidget):
         hint_font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(hint_font)
         hint = (
-            tr("Press Space to begin now")
+            tr("Press Space or click to begin")
             if self._face_found
             else tr("Waiting for your face…")
         )
